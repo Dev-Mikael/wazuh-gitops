@@ -14,9 +14,7 @@ manager:
 
 dashboard:
   service:
-    type: LoadBalancer   # Exposes the dashboard externally on Azure
-    annotations:
-      service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+    type: ClusterIP   # Use ClusterIP and front with an ingress or proxy for domain-only access
   resources:
     requests:
       memory: "4Gi"

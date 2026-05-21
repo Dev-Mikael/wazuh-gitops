@@ -20,9 +20,7 @@ data:
 
     dashboard:
       service:
-        type: LoadBalancer
-        annotations:
-          service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+        type: ClusterIP
       resources:
         requests:
           memory: "4Gi"

@@ -42,7 +42,52 @@ helm install wazuh wazuh/wazuh -n wazuh -f clusters/production/wazuh/values.yaml
 
 - `storageClassName: default` is configured to use the cluster default storage class on AKS.
 - If your Azure cluster requires a named storage class, change the value to `managed-premium` or `managed-standard`.
-- The Wazuh dashboard is exposed using a `LoadBalancer` service.
+- This manifest does not configure a public domain name or DNS record.
+- The Wazuh dashboard is configured as `ClusterIP`, so it is not directly exposed as a public Azure LoadBalancer.
+
+## Domain-only dashboard access
+
+This manifest does not create DNS records or an ingress resource automatically.
+
+For access over VPN or a bastion host, keep `dashboard.service.type: ClusterIP` and use one of these approaches:
+
+### Option 1: Internal ingress behind VPN
+
+- Use your existing ingress controller with an internal-facing load balancer or host.
+- Create an `Ingress` for a private host such as `wazuh.internal.example.com`.
+- Configure DNS so the host resolves only inside the VPN or corporate network.
+- Restrict access at the ingress controller with source IP filtering or firewall rules.
+- Use TLS for secure traffic.
+
+This gives you a real domain name for the dashboard while avoiding public internet exposure.
+
+### Option 2: Bastion host / jumpbox access
+
+If you prefer not to expose the dashboard by DNS at all, access it through a bastion host:
+
+1. SSH into your bastion host on the private network.
+2. From the bastion, use `kubectl` to connect to the cluster.
+3. Forward the dashboard port locally:
+
+```bash
+ssh -L 5601:localhost:5601 <bastion-host>
+```
+
+4. On the bastion, run:
+
+```bash
+kubectl port-forward -n wazuh svc/wazuh-dashboard 5601:5601
+```
+
+5. Open `http://localhost:5601` from your local machine.
+
+If the service name differs in your Wazuh deployment, use the actual dashboard service name from `kubectl get svc -n wazuh`.
+
+### Recommended setup
+
+- Use `ClusterIP` for the dashboard service.
+- Use an internal ingress host or private DNS for VPN-only access.
+- Do not expose the dashboard on a public LoadBalancer unless you explicitly need it.
 
 ## GitOps / Flux usage
 
