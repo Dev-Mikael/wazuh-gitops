@@ -16,15 +16,35 @@ These manifests install Wazuh into a dedicated `wazuh` namespace on a Kubernetes
 - Cluster already running and accessible via `kubectl`.
 - Flux v2 installed and configured, or the ability to apply raw Kubernetes manifests.
 
-## Install with Flux
+## GitOps setup with Flux
 
-Apply the folder manifests in your Flux-enabled git repo path or directly via `kubectl` if your cluster is already synced by Flux.
+### 1. Bootstrap Flux on your Azure cluster
+
+If Flux is not yet installed, bootstrap it:
 
 ```bash
-kubectl apply -f clusters/production/wazuh/namespace.yaml
-kubectl apply -f clusters/production/wazuh/helm-repository.yaml
-kubectl apply -f clusters/production/wazuh/wazuh-values-configmap.yaml
-kubectl apply -f clusters/production/wazuh/helm-release.yaml
+flux bootstrap github \
+  --owner=Dev-Mikael \
+  --repository=wazuh-gitops \
+  --branch=main \
+  --path=clusters/production/wazuh
+```
+
+### 2. Flux auto-syncs this directory
+
+Once Flux is bootstrapped and watching this repo:
+
+- Flux automatically detects the `kustomization.yaml` in this directory.
+- It creates the namespace, adds the Helm repository, and deploys the HelmRelease.
+- The cluster state stays in sync with this git repo.
+- Any changes you push to `main` are automatically applied to the cluster within the sync interval.
+
+### 3. Manual apply (optional)
+
+If you prefer to apply without Flux or need a one-time install:
+
+```bash
+kubectl apply -k clusters/production/wazuh/
 ```
 
 ## Manual Helm install
@@ -89,11 +109,22 @@ If the service name differs in your Wazuh deployment, use the actual dashboard s
 - Use an internal ingress host or private DNS for VPN-only access.
 - Do not expose the dashboard on a public LoadBalancer unless you explicitly need it.
 
-## GitOps / Flux usage
+## Flux automation details
 
-- If you are using Flux, add this directory to a `Kustomization` or `HelmRelease` path in your Flux configuration.
-- The namespace, Helm repository, ConfigMap, and Helm release should be applied together in the same repo path.
-- Because `helm-release.yaml` lives in the `wazuh` namespace, Flux will install the Wazuh chart into that same namespace.
+- The `kustomization.yaml` orchestrates the Namespace, HelmRepository, and HelmRelease in dependency order.
+- The HelmRelease has an inline `values` section (instead of a separate ConfigMap), making it easier to version and review in git.
+- Flux reconciles every 10 minutes (set by `interval: 10m` in the HelmRelease).
+- If a deployment fails, Flux will retry up to 3 times (set by `install.remediation.retries: 3`).
+- To force an immediate sync, use:
+  ```bash
+  flux reconcile source git <repo-name>
+  flux reconcile kustomization wazuh
+  ```
+- To check the sync status:
+  ```bash
+  flux get kustomizations
+  flux get helmreleases -n wazuh
+  ```
 
 ## Admin credentials
 

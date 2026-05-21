@@ -19,9 +19,28 @@ spec:
         kind: HelmRepository
         name: wazuh
         namespace: wazuh
-  valuesFrom:
-    - kind: ConfigMap
-      name: wazuh-values
+  values:
+    indexer:
+      replicas: 1
+      storage:
+        storageClassName: default
+        size: 50Gi
+    manager:
+      storage:
+        storageClassName: default
+        size: 20Gi
+      service:
+        type: ClusterIP
+    dashboard:
+      service:
+        type: ClusterIP
+      resources:
+        requests:
+          memory: "4Gi"
+          cpu: "1000m"
+        limits:
+          memory: "8Gi"
+          cpu: "2000m"
   install:
     remediation:
       retries: 3
