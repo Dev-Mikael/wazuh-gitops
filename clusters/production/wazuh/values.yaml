@@ -1,0 +1,26 @@
+# values.yaml (key sections)
+indexer:
+  replicas: 1
+  storage:
+    storageClassName: default   # Use your AKS default storage class or change to managed-premium / managed-standard
+    size: 50Gi
+
+manager:
+  storage:
+    storageClassName: default
+    size: 20Gi
+  service:
+    type: ClusterIP
+
+dashboard:
+  service:
+    type: LoadBalancer   # Exposes the dashboard externally on Azure
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "1000m"
+    limits:
+      memory: "8Gi"
+      cpu: "2000m"
