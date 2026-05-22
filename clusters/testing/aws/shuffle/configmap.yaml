@@ -7,7 +7,7 @@ data:
   BACKEND_HOSTNAME: shuffle-backend
   BASE_URL: http://shuffle-backend:5001
   OUTER_HOSTNAME: shuffle-backend
-  SSO_REDIRECT_URL: https://shuffle.internal.turog.example
+  SSO_REDIRECT_URL: https://shuffle.internal.bigmods.example
   SHUFFLE_APP_DOWNLOAD_LOCATION: https://github.com/shuffle/python-apps
   SHUFFLE_APP_FORCE_UPDATE: "false"
   SHUFFLE_APP_HOTLOAD_FOLDER: /shuffle-apps
@@ -33,7 +33,7 @@ data:
   SHUFFLE_INTERNAL_HTTPS_PROXY: noproxy
   SHUFFLE_CONTAINER_AUTO_CLEANUP: "true"
   SHUFFLE_PROTECTED_CLEANUP_DISABLED: "true"
-  ENVIRONMENT_NAME: TUROG-AWS
+  ENVIRONMENT_NAME: BIGMODS-AWS
   ORG_ID: Shuffle
   IS_KUBERNETES: "true"
   TZ: UTC

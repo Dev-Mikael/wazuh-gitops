@@ -10,11 +10,11 @@ AWS, the managed Kubernetes service is EKS. This runbook is for AWS EKS.
 
 We are building a private Wazuh security monitoring platform on AWS Kubernetes.
 
-Wazuh will receive logs and security events from TUROG endpoints. The first endpoint
+Wazuh will receive logs and security events from BIGMODS endpoints. The first endpoint
 scope is:
 
 ```text
-8 TUROG Windows laptops
+8 BIGMODS Windows laptops
 ```
 
 The target outcome is:
@@ -64,7 +64,7 @@ Build AWS EKS
 
 | Action point | Status in this repo | Remaining work |
 |---|---|---|
-| Enroll all 8 TUROG Windows laptops onto Wazuh | Supported by the Wazuh deployment and `windows-endpoints` group config | Install Wazuh agent on each laptop and enroll each one into `windows-endpoints` |
+| Enroll all 8 BIGMODS Windows laptops onto Wazuh | Supported by the Wazuh deployment and `windows-endpoints` group config | Install Wazuh agent on each laptop and enroll each one into `windows-endpoints` |
 | Set up group configuration so settings push automatically | Implemented by `patches/agent-group-bootstrap.yaml` and `agent-groups/windows-endpoints-agent.conf` | Verify each agent shows `group_config_status: synced` |
 | Ensure Wazuh dashboard is VPN-only, not public | Kubernetes services are patched to `ClusterIP`, so no public LoadBalancer is created | Provide VPN/private network path, such as AWS Client VPN plus internal ingress or bastion |
 
@@ -329,7 +329,7 @@ Never commit `.env`.
 
 ### `agent-groups/windows-endpoints-agent.conf`
 
-This is the group config for the 8 TUROG Windows laptops.
+This is the group config for the 8 BIGMODS Windows laptops.
 
 It collects:
 
@@ -825,7 +825,7 @@ That file tells Suricata sensors to collect:
 
 This does not affect the 8 Windows laptops. It is for Linux hosts running Suricata.
 
-## Enrolling The 8 TUROG Windows Laptops
+## Enrolling The 8 BIGMODS Windows Laptops
 
 The Kubernetes deployment does not magically install software on laptops. The Wazuh
 agent still needs to be installed on each laptop.
@@ -852,7 +852,7 @@ Agent config concept:
 ```xml
 <client>
   <server>
-    <address>wazuh.internal.turog.example</address>
+    <address>wazuh.internal.bigmods.example</address>
     <port>1514</port>
     <protocol>tcp</protocol>
   </server>
@@ -862,18 +862,18 @@ Agent config concept:
 </client>
 ```
 
-For the 8 TUROG laptops, track them like this:
+For the 8 BIGMODS laptops, track them like this:
 
 | Laptop | Expected group | Status |
 |---|---|---|
-| TUROG-WIN-01 | windows-endpoints | To enroll |
-| TUROG-WIN-02 | windows-endpoints | To enroll |
-| TUROG-WIN-03 | windows-endpoints | To enroll |
-| TUROG-WIN-04 | windows-endpoints | To enroll |
-| TUROG-WIN-05 | windows-endpoints | To enroll |
-| TUROG-WIN-06 | windows-endpoints | To enroll |
-| TUROG-WIN-07 | windows-endpoints | To enroll |
-| TUROG-WIN-08 | windows-endpoints | To enroll |
+| BIGMODS-WIN-01 | windows-endpoints | To enroll |
+| BIGMODS-WIN-02 | windows-endpoints | To enroll |
+| BIGMODS-WIN-03 | windows-endpoints | To enroll |
+| BIGMODS-WIN-04 | windows-endpoints | To enroll |
+| BIGMODS-WIN-05 | windows-endpoints | To enroll |
+| BIGMODS-WIN-06 | windows-endpoints | To enroll |
+| BIGMODS-WIN-07 | windows-endpoints | To enroll |
+| BIGMODS-WIN-08 | windows-endpoints | To enroll |
 
 Success criteria:
 
@@ -910,7 +910,7 @@ Use this order:
 19. Set up Shuffle workflow webhook.
 20. Store OTX and DFIR-IRIS credentials in Shuffle.
 21. Configure Wazuh-to-Shuffle webhook securely.
-22. Enroll all 8 TUROG Windows laptops into `windows-endpoints`.
+22. Enroll all 8 BIGMODS Windows laptops into `windows-endpoints`.
 23. Verify group config sync.
 24. Verify Defender events, Wazuh alerts, Shuffle executions, OTX enrichment, and DFIR-IRIS alerts/cases.
 
@@ -957,10 +957,10 @@ Dashboard service password matches internal_users.yml bcrypt hash.
 ### Endpoint Enrollment
 
 ```text
-8 TUROG Windows laptops installed with Wazuh agent.
-8 TUROG Windows laptops enrolled into windows-endpoints.
-8 TUROG Windows laptops show Active.
-8 TUROG Windows laptops show group_config_status synced.
+8 BIGMODS Windows laptops installed with Wazuh agent.
+8 BIGMODS Windows laptops enrolled into windows-endpoints.
+8 BIGMODS Windows laptops show Active.
+8 BIGMODS Windows laptops show group_config_status synced.
 Windows Defender events visible.
 ```
 

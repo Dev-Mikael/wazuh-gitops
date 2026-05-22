@@ -12,8 +12,8 @@ data:
   CELERY_BROKER: amqp://dfir-iris-rabbitmq
   IRIS_AUTHENTICATION_TYPE: local
   IRIS_ADM_USERNAME: administrator
-  IRIS_ADM_EMAIL: soc@turog.local
+  IRIS_ADM_EMAIL: soc@bigmods.local
   IRIS_UPSTREAM_SERVER: dfir-iris-app
   IRIS_UPSTREAM_PORT: "8000"
-  SERVER_NAME: iris.internal.turog.example
+  SERVER_NAME: iris.internal.bigmods.example
   INTERFACE_HTTPS_PORT: "443"
