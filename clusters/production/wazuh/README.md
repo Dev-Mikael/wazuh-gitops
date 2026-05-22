@@ -28,7 +28,7 @@ the official Wazuh Kubernetes manifest set, not a third-party Helm chart.
 - `patches/delete-default-secrets.yaml` - Removes the upstream example Kubernetes Secrets so generated SealedSecrets can own the real secret names.
 - `secrets/sealed/` - Destination for generated encrypted Wazuh SealedSecrets. Empty until the generation workflow runs.
 - `agent-groups/windows-endpoints-agent.conf` - Centralized Wazuh agent group config for Windows laptops. It collects Microsoft Defender and Sysmon event channels.
-- `agent-groups/suricata-endpoints-agent.conf` - Centralized Wazuh agent group config for Linux hosts running Suricata. It collects `/var/log/suricata/eve.json`.
+- `agent-groups/suricata-sensors-agent.conf` - Centralized Wazuh agent group config for dedicated Suricata network IDS sensors. It collects `/var/log/suricata/eve.json`.
 - `patches/agent-group-bootstrap.yaml` - Adds an init container to the Wazuh manager master that writes the Windows and Suricata group `agent.conf` files into `/var/ossec/etc/shared`.
 - `integrations/manager-integrations.xml` - Documents the Wazuh manager integration block for Shuffle. Use Shuffle to fan out to DFIR-IRIS and AlienVault OTX enrichment.
 - `integrations/custom-shuffle-secret` - Custom Wazuh integration script that forwards alerts to Shuffle while reading the real webhook URL from a mounted Kubernetes Secret.
@@ -249,14 +249,23 @@ This repo now bootstraps that group configuration automatically through
 
 ### Suricata
 
-Suricata logs belong on the endpoint where Suricata writes `eve.json`.
+Suricata is the network IDS control path. It is not installed on the 8 Windows
+laptops in this design. Instead, deploy Suricata on a dedicated network sensor or
+managed network inspection point that can see the laptops' traffic, then install the
+Wazuh agent on that sensor.
 
-Use `agent-groups/suricata-endpoints-agent.conf` for Linux Suricata sensors. Wazuh
-parses `/var/log/suricata/eve.json` JSON events and surfaces Suricata alerts in the
+Use `agent-groups/suricata-sensors-agent.conf` for Suricata sensors. Wazuh parses
+`/var/log/suricata/eve.json` JSON events and surfaces Suricata alerts in the
 dashboard.
 
 This repo now bootstraps that group configuration automatically through
 `patches/agent-group-bootstrap.yaml`.
+
+For a Windows-only endpoint rollout, the Suricata sensor is a separate control
+component, not a ninth monitored endpoint. Put it where Windows laptop traffic passes,
+such as the office firewall, VPN egress, SPAN/TAP port, or an AWS inspection path.
+Until that sensor exists and has traffic visibility, the Suricata group is only
+prepared configuration and does not produce network IDS alerts.
 
 ### ClamAV
 
@@ -269,7 +278,7 @@ Create these Wazuh groups:
 
 ```text
 windows-endpoints
-suricata-endpoints
+suricata-sensors
 ```
 
 You can create and manage groups from the Wazuh dashboard under agent management, or

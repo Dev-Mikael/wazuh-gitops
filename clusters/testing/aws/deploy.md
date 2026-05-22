@@ -28,6 +28,11 @@ Windows laptops
   -> Shuffle
   -> AlienVault OTX enrichment
   -> DFIR-IRIS alert/case
+
+Windows laptop network traffic
+  -> VPN / office gateway / inspection path
+  -> Suricata network IDS sensor
+  -> Wazuh dashboard
 ```
 
 ## Child-Level Mental Model
@@ -39,6 +44,7 @@ Think of this like a secured office.
 - SealedSecrets is the locked safe. It lets us keep encrypted secrets in Git.
 - Wazuh is the security desk.
 - Wazuh agents are the security reporters installed on laptops.
+- Suricata is the network camera watching traffic from the laptops.
 - Shuffle is the automation assistant.
 - AlienVault OTX is the threat intelligence lookup book.
 - DFIR-IRIS is the incident case notebook.
@@ -55,6 +61,7 @@ Build AWS EKS
   -> Deploy self-hosted Shuffle
   -> Deploy self-hosted DFIR-IRIS
   -> Enroll the 8 Windows laptops
+  -> Put Suricata on the laptop traffic path
   -> Send Wazuh alerts to Shuffle
   -> Shuffle enriches with OTX
   -> Shuffle creates alerts or cases in DFIR-IRIS
@@ -67,6 +74,7 @@ Build AWS EKS
 | Enroll all 8 BIGMODS Windows laptops onto Wazuh | Supported by the Wazuh deployment and `windows-endpoints` group config | Install Wazuh agent on each laptop and enroll each one into `windows-endpoints` |
 | Set up group configuration so settings push automatically | Implemented by `patches/agent-group-bootstrap.yaml` and `agent-groups/windows-endpoints-agent.conf` | Verify each agent shows `group_config_status: synced` |
 | Ensure Wazuh dashboard is VPN-only, not public | Kubernetes services are patched to `ClusterIP`, so no public LoadBalancer is created | Provide VPN/private network path, such as AWS Client VPN plus internal ingress or bastion |
+| Satisfy network IDS control for Windows endpoint traffic | Wazuh is ready to ingest Suricata `eve.json` from the `suricata-sensors` group | Place a Suricata sensor or AWS Network Firewall on the Windows laptop traffic path |
 
 ## Repository Layout
 
@@ -340,9 +348,13 @@ Microsoft-Windows-Sysmon/Operational
 
 This is how Microsoft Defender events get into Wazuh.
 
-### `agent-groups/suricata-endpoints-agent.conf`
+### `agent-groups/suricata-sensors-agent.conf`
 
-This is the group config for Linux Suricata sensors.
+This is the group config for dedicated Suricata network IDS sensors.
+
+Important: this does not mean the Windows laptops become Linux endpoints. It means a
+separate network sensor watches traffic from or to the Windows laptops and sends its
+Suricata alerts to Wazuh.
 
 It collects:
 
@@ -350,7 +362,8 @@ It collects:
 /var/log/suricata/eve.json
 ```
 
-This matters only for Linux hosts that actually run Suricata.
+This matters only for systems that actually run Suricata and can see the network
+traffic you need to monitor.
 
 ### `patches/agent-group-bootstrap.yaml`
 
@@ -360,7 +373,7 @@ When the manager starts, the init container writes:
 
 ```text
 /var/ossec/etc/shared/windows-endpoints/agent.conf
-/var/ossec/etc/shared/suricata-endpoints/agent.conf
+/var/ossec/etc/shared/suricata-sensors/agent.conf
 ```
 
 That is important because Wazuh pushes group files from:
@@ -809,12 +822,56 @@ Microsoft-Windows-Sysmon/Operational
 Because `patches/agent-group-bootstrap.yaml` writes this file into the Wazuh manager's
 shared group folder, the config is pushed automatically to agents in that group.
 
-## Suricata Integration
+## Network IDS Control With Suricata
 
-Suricata is configured through a Linux agent group:
+For the ISMS network IDS control, the key point is this:
 
 ```text
-clusters/production/wazuh/agent-groups/suricata-endpoints-agent.conf
+Windows laptop telemetry is endpoint monitoring.
+Suricata is network monitoring.
+```
+
+The 8 Windows laptops do not need Suricata installed locally. The laptops will be
+assigned to staff and may be used both on the office network and from home. That
+means the network IDS design must cover two traffic paths:
+
+```text
+Office use:
+  laptop -> office switch/firewall/gateway -> Suricata or firewall NIDS
+
+Home/remote use:
+  laptop -> always-on VPN/SASE/private access path -> Suricata, AWS Network Firewall,
+  or equivalent inspection point
+```
+
+To satisfy the network IDS control for remote users, do not rely on a sensor sitting
+only in the office. It will not see home-network traffic unless the laptop is forced
+through VPN/SASE or another inspection path.
+
+Deploy a dedicated Suricata sensor where laptop traffic passes. That sensor can be a
+Linux VM, firewall appliance, VPN egress sensor, SPAN/TAP-connected sensor, or
+managed AWS inspection path.
+
+The clean BIGMODS design is:
+
+```text
+8 Windows laptops
+  -> VPN / office gateway / routed inspection path
+  -> Suricata network IDS sensor
+  -> /var/log/suricata/eve.json
+  -> Wazuh agent on the sensor
+  -> Wazuh group: suricata-sensors
+  -> Wazuh dashboard alerts
+```
+
+This satisfies the control because the organization has network IDS visibility over
+traffic from the Windows endpoints. The Suricata sensor is not counted as one of the
+8 Windows endpoints; it is a security monitoring component.
+
+This repo configures Wazuh to ingest Suricata alerts through this agent group:
+
+```text
+clusters/production/wazuh/agent-groups/suricata-sensors-agent.conf
 ```
 
 That file tells Suricata sensors to collect:
@@ -823,7 +880,40 @@ That file tells Suricata sensors to collect:
 /var/log/suricata/eve.json
 ```
 
-This does not affect the 8 Windows laptops. It is for Linux hosts running Suricata.
+Deployment choices:
+
+| Option | Best use | Notes |
+|---|---|---|
+| Suricata on office firewall or SPAN/TAP sensor | Office laptops using office network | Strong classic NIDS evidence |
+| Suricata at VPN egress | Remote laptops forced through VPN | Best fit if BIGMODS wants one NIDS story for office and home use |
+| AWS Network Firewall with Suricata-compatible rules | Traffic routed through AWS | Managed option; send alert logs to Wazuh through AWS log ingestion |
+| SASE/SSE provider with IDS/IPS logging | Staff often work from home | Good enterprise option if logs can be exported to Wazuh/Shuffle |
+| Suricata installed on each Windows laptop | Last resort only | Harder to manage, noisy, performance risk, not the recommended control design |
+
+For the current Windows-only scope, use `windows-endpoints` for laptop telemetry and
+`suricata-sensors` for the separate NIDS sensor.
+
+Recommended BIGMODS control decision:
+
+```text
+Use Wazuh + Sysmon + AV/EDR on every laptop.
+Use always-on VPN or SASE for remote access.
+Inspect office and VPN/SASE egress traffic with Suricata, AWS Network Firewall, or
+an equivalent IDS/IPS service.
+Send NIDS alerts into Wazuh/Shuffle/DFIR-IRIS.
+```
+
+If the VPN is split-tunnel, be precise in the ISMS evidence:
+
+```text
+NIDS covers corporate traffic routed through the VPN/private network.
+Endpoint AV/EDR, DNS filtering, firewall policy, and Sysmon/Wazuh cover local home
+internet activity that does not pass through the network IDS sensor.
+```
+
+If the control requires network IDS coverage for all laptop traffic everywhere, use
+full-tunnel always-on VPN or SASE/SSE. Otherwise, the office sensor sees office
+traffic only.
 
 ## Enrolling The 8 BIGMODS Windows Laptops
 
@@ -910,9 +1000,12 @@ Use this order:
 19. Set up Shuffle workflow webhook.
 20. Store OTX and DFIR-IRIS credentials in Shuffle.
 21. Configure Wazuh-to-Shuffle webhook securely.
-22. Enroll all 8 BIGMODS Windows laptops into `windows-endpoints`.
-23. Verify group config sync.
-24. Verify Defender events, Wazuh alerts, Shuffle executions, OTX enrichment, and DFIR-IRIS alerts/cases.
+22. Choose the network IDS location for Windows laptop traffic.
+23. Deploy Suricata or AWS Network Firewall on that traffic path.
+24. If using self-hosted Suricata, install the Wazuh agent on the sensor and enroll it into `suricata-sensors`.
+25. Enroll all 8 BIGMODS Windows laptops into `windows-endpoints`.
+26. Verify group config sync.
+27. Verify Defender events, Suricata alerts, Wazuh alerts, Shuffle executions, OTX enrichment, and DFIR-IRIS alerts/cases.
 
 ## Verification Checklist
 
@@ -964,6 +1057,19 @@ Dashboard service password matches internal_users.yml bcrypt hash.
 Windows Defender events visible.
 ```
 
+### Network IDS
+
+```text
+Suricata sensor or AWS Network Firewall is deployed on the laptop traffic path.
+Office laptop traffic path is documented.
+Remote laptop traffic path is documented.
+Always-on VPN, SASE, or split-tunnel scope decision is documented.
+Network IDS rules are enabled.
+If self-hosted Suricata is used, sensor is enrolled in Wazuh group suricata-sensors.
+Suricata eve.json alerts appear in Wazuh.
+Evidence exists for ISMS audit: sensor location, rule source, alert sample, response workflow.
+```
+
 ### Integrations
 
 ```text
@@ -983,7 +1089,15 @@ Shuffle creates DFIR-IRIS alert/case from Wazuh alert.
 - The real Shuffle webhook URL should not be committed to Git.
 - DFIR-IRIS and OTX API keys should live in Shuffle or a secret manager, not Wazuh ConfigMaps.
 - The current repo deploys Wazuh, SealedSecrets, Shuffle, and DFIR-IRIS.
-- The current repo configures Microsoft Defender and Suricata collection through Wazuh agent groups.
+- The current repo configures Microsoft Defender collection through the Windows group
+  and Suricata collection through the dedicated `suricata-sensors` group.
+- A Suricata Wazuh group alone does not satisfy the network IDS control. The control
+  is satisfied only when the sensor is placed where BIGMODS Windows laptop traffic
+  actually passes.
+- If staff use laptops from home without full-tunnel VPN or SASE, an office Suricata
+  sensor will not inspect that home internet traffic. In that case, document split
+  coverage and use endpoint AV/EDR, DNS filtering, host firewall policy, and Wazuh
+  telemetry as compensating controls.
 - The included Shuffle Kubernetes manifests are suitable for AWS testing. Before
   final production, pin tested Shuffle image tags instead of `latest` and decide on
   the backup/restore and scaling model.

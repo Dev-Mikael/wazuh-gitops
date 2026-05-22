@@ -10,7 +10,7 @@ configMapGenerator:
     namespace: wazuh
     files:
       - windows-endpoints-agent.conf=agent-groups/windows-endpoints-agent.conf
-      - suricata-endpoints-agent.conf=agent-groups/suricata-endpoints-agent.conf
+      - suricata-sensors-agent.conf=agent-groups/suricata-sensors-agent.conf
     options:
       disableNameSuffixHash: true
   - name: wazuh-manager-integrations
