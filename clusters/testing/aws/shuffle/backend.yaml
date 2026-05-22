@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shuffle-backend
+  namespace: shuffle
+spec:
+  type: ClusterIP
+  selector:
+    app: shuffle-backend
+  ports:
+    - name: api
+      port: 5001
+      targetPort: 5001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shuffle-backend
+  namespace: shuffle
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shuffle-backend
+  template:
+    metadata:
+      labels:
+        app: shuffle-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/shuffle/shuffle-backend:latest
+          ports:
+            - name: api
+              containerPort: 5001
+          envFrom:
+            - configMapRef:
+                name: shuffle-config
+            - secretRef:
+                name: shuffle-secrets
+          volumeMounts:
+            - name: shuffle-apps
+              mountPath: /shuffle-apps
+            - name: shuffle-files
+              mountPath: /shuffle-files
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: shuffle-apps
+          emptyDir: {}
+        - name: shuffle-files
+          persistentVolumeClaim:
+            claimName: shuffle-files
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shuffle-files
+  namespace: shuffle
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: wazuh-storage
+  resources:
+    requests:
+      storage: 20Gi

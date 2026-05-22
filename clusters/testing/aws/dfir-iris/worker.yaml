@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dfir-iris-worker
+  namespace: dfir-iris
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dfir-iris-worker
+  template:
+    metadata:
+      labels:
+        app: dfir-iris-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/dfir-iris/iriswebapp_app:v2.4.27
+          command: ["./wait-for-iriswebapp.sh", "dfir-iris-app:8000", "./iris-entrypoint.sh", "iris-worker"]
+          env:
+            - name: IRIS_WORKER
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: dfir-iris-config
+            - secretRef:
+                name: dfir-iris-secrets
+          volumeMounts:
+            - name: downloads
+              mountPath: /home/iris/downloads
+            - name: user-templates
+              mountPath: /home/iris/user_templates
+            - name: server-data
+              mountPath: /home/iris/server_data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: dfir-iris-downloads
+        - name: user-templates
+          persistentVolumeClaim:
+            claimName: dfir-iris-user-templates
+        - name: server-data
+          persistentVolumeClaim:
+            claimName: dfir-iris-server-data

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dfir-iris-config
+  namespace: dfir-iris
+data:
+  DOCKERIZED: "1"
+  POSTGRES_USER: postgres
+  POSTGRES_DB: iris_db
+  POSTGRES_SERVER: dfir-iris-postgres
+  POSTGRES_PORT: "5432"
+  CELERY_BROKER: amqp://dfir-iris-rabbitmq
+  IRIS_AUTHENTICATION_TYPE: local
+  IRIS_ADM_USERNAME: administrator
+  IRIS_ADM_EMAIL: soc@turog.local
+  IRIS_UPSTREAM_SERVER: dfir-iris-app
+  IRIS_UPSTREAM_PORT: "8000"
+  SERVER_NAME: iris.internal.turog.example
+  INTERFACE_HTTPS_PORT: "443"

@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shuffle-config
+  namespace: shuffle
+data:
+  BACKEND_HOSTNAME: shuffle-backend
+  BASE_URL: http://shuffle-backend:5001
+  OUTER_HOSTNAME: shuffle-backend
+  SSO_REDIRECT_URL: https://shuffle.internal.turog.example
+  SHUFFLE_APP_DOWNLOAD_LOCATION: https://github.com/shuffle/python-apps
+  SHUFFLE_APP_FORCE_UPDATE: "false"
+  SHUFFLE_APP_HOTLOAD_FOLDER: /shuffle-apps
+  SHUFFLE_APP_HOTLOAD_LOCATION: /shuffle-apps
+  SHUFFLE_FILE_LOCATION: /shuffle-files
+  SHUFFLE_ELASTIC: "true"
+  SHUFFLE_OPENSEARCH_URL: https://shuffle-opensearch:9200
+  SHUFFLE_OPENSEARCH_USERNAME: admin
+  SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY: "true"
+  SHUFFLE_WORKER_IMAGE: ghcr.io/shuffle/shuffle-worker:latest
+  SHUFFLE_STATS_DISABLED: "true"
+  SHUFFLE_LOGS_DISABLED: "true"
+  SHUFFLE_HEALTHCHECK_DISABLED: "false"
+  SHUFFLE_SKIPSSL_VERIFY: "true"
+  SHUFFLE_ORBORUS_EXECUTION_CONCURRENCY: "5"
+  SHUFFLE_ORBORUS_STARTUP_DELAY: "30"
+  SHUFFLE_APP_SDK_TIMEOUT: "300"
+  SHUFFLE_SWARM_CONFIG: run
+  SHUFFLE_SWARM_BRIDGE_DEFAULT_MTU: "1500"
+  SHUFFLE_PASS_WORKER_PROXY: "TRUE"
+  SHUFFLE_PASS_APP_PROXY: "TRUE"
+  SHUFFLE_INTERNAL_HTTP_PROXY: noproxy
+  SHUFFLE_INTERNAL_HTTPS_PROXY: noproxy
+  SHUFFLE_CONTAINER_AUTO_CLEANUP: "true"
+  SHUFFLE_PROTECTED_CLEANUP_DISABLED: "true"
+  ENVIRONMENT_NAME: TUROG-AWS
+  ORG_ID: Shuffle
+  IS_KUBERNETES: "true"
+  TZ: UTC
+  CLEANUP: "false"
+  OPENSEARCH_JAVA_OPTS: -Xms2g -Xmx2g

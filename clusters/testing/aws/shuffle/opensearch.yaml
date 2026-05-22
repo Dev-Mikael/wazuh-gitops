@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: shuffle-opensearch
+  namespace: shuffle
+spec:
+  type: ClusterIP
+  selector:
+    app: shuffle-opensearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: shuffle-opensearch
+  namespace: shuffle
+spec:
+  serviceName: shuffle-opensearch
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shuffle-opensearch
+  template:
+    metadata:
+      labels:
+        app: shuffle-opensearch
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: increase-vm-max-map-count
+          image: busybox:1.36
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:3.2.0
+          ports:
+            - name: http
+              containerPort: 9200
+          envFrom:
+            - configMapRef:
+                name: shuffle-config
+            - secretRef:
+                name: shuffle-secrets
+          env:
+            - name: bootstrap.memory_lock
+              value: "true"
+            - name: DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI
+              value: "true"
+            - name: cluster.initial_master_nodes
+              value: shuffle-opensearch
+            - name: cluster.routing.allocation.disk.threshold_enabled
+              value: "false"
+            - name: cluster.name
+              value: shuffle-cluster
+            - name: node.name
+              value: shuffle-opensearch
+            - name: node.store.allow_mmap
+              value: "false"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 3Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: shuffle-opensearch
+              mountPath: /usr/share/opensearch/data
+  volumeClaimTemplates:
+    - metadata:
+        name: shuffle-opensearch
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 50Gi

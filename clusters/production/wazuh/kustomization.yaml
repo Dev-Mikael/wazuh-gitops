@@ -1,10 +1,28 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-metadata:
-  name: wazuh
-  namespace: wazuh
 
 resources:
-  - namespace.yaml
-  - helm-repository.yaml
-  - helm-release.yaml
+  - upstream
+  - secrets/sealed
+
+configMapGenerator:
+  - name: wazuh-agent-group-configs
+    namespace: wazuh
+    files:
+      - windows-endpoints-agent.conf=agent-groups/windows-endpoints-agent.conf
+      - suricata-endpoints-agent.conf=agent-groups/suricata-endpoints-agent.conf
+    options:
+      disableNameSuffixHash: true
+  - name: wazuh-manager-integrations
+    namespace: wazuh
+    files:
+      - custom-shuffle-secret=integrations/custom-shuffle-secret
+    options:
+      disableNameSuffixHash: true
+
+patches:
+  - path: patches/aws-storage-class.yaml
+  - path: patches/clusterip-services.yaml
+  - path: patches/production-resources.yaml
+  - path: patches/delete-default-secrets.yaml
+  - path: patches/agent-group-bootstrap.yaml

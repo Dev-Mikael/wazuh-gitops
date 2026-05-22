@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shuffle-orborus
+  namespace: shuffle
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shuffle-orborus
+  template:
+    metadata:
+      labels:
+        app: shuffle-orborus
+    spec:
+      serviceAccountName: shuffle-orborus
+      containers:
+        - name: orborus
+          image: ghcr.io/shuffle/shuffle-orborus:latest
+          envFrom:
+            - configMapRef:
+                name: shuffle-config
+            - secretRef:
+                name: shuffle-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

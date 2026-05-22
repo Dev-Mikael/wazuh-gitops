@@ -1,159 +1,350 @@
-# Wazuh Azure Installation
+# Wazuh Production Deployment
 
-These manifests install Wazuh into a dedicated `wazuh` namespace on a Kubernetes cluster running in Azure.
+This directory deploys Wazuh to Kubernetes with FluxCD and Kustomize. It uses the
+official Wazuh Kubernetes manifests, vendored from `wazuh/wazuh-kubernetes` `v4.14.5`,
+and layers this repo's production settings on top.
 
-## Files
+The previous HelmRelease-based install was removed because the production choice is
+the official Wazuh Kubernetes manifest set, not a third-party Helm chart.
 
-- `namespace.yaml` - Creates the `wazuh` namespace.
-- `helm-repository.yaml` - Adds the Wazuh Helm chart source for Flux.
-- `helm-release.yaml` - Deploys the Wazuh Helm chart into the `wazuh` namespace.
-- `values.yaml` - Helm values overrides for Azure.
-- `wazuh-values-configmap.yaml` - Flux ConfigMap containing the Helm values for the release.
+## What This Installs
+
+- Wazuh manager master and worker nodes.
+- Wazuh indexer.
+- Wazuh dashboard.
+- Internal Kubernetes services for manager API, agent enrollment, agent events, and dashboard.
+- AWS-compatible persistent storage through the EBS CSI driver using encrypted `gp3`
+  volumes.
+- SealedSecrets-ready secret management for the Wazuh API, authd, cluster key,
+  dashboard, and indexer credentials.
+
+## File Map
+
+- `kustomization.yaml` - Main Flux/Kustomize entrypoint. It renders the vendored official Wazuh base and applies local production patches.
+- `upstream/` - Vendored copy of the official `wazuh/` directory from `wazuh/wazuh-kubernetes` `v4.14.5`. Keep this close to upstream and change it only when a patch cannot be expressed cleanly outside the base.
+- `patches/aws-storage-class.yaml` - Replaces the upstream storage class with an AWS EBS CSI `gp3` storage class named `wazuh-storage`.
+- `patches/clusterip-services.yaml` - Keeps Wazuh manager and dashboard services private by changing them from `LoadBalancer` to `ClusterIP`.
+- `patches/production-resources.yaml` - Sets production-oriented CPU, memory, and PVC sizes for indexer, manager, worker, and dashboard.
+- `patches/delete-default-secrets.yaml` - Removes the upstream example Kubernetes Secrets so generated SealedSecrets can own the real secret names.
+- `secrets/sealed/` - Destination for generated encrypted Wazuh SealedSecrets. Empty until the generation workflow runs.
+- `agent-groups/windows-endpoints-agent.conf` - Centralized Wazuh agent group config for Windows laptops. It collects Microsoft Defender and Sysmon event channels.
+- `agent-groups/suricata-endpoints-agent.conf` - Centralized Wazuh agent group config for Linux hosts running Suricata. It collects `/var/log/suricata/eve.json`.
+- `patches/agent-group-bootstrap.yaml` - Adds an init container to the Wazuh manager master that writes the Windows and Suricata group `agent.conf` files into `/var/ossec/etc/shared`.
+- `integrations/manager-integrations.xml` - Documents the Wazuh manager integration block for Shuffle. Use Shuffle to fan out to DFIR-IRIS and AlienVault OTX enrichment.
+- `integrations/custom-shuffle-secret` - Custom Wazuh integration script that forwards alerts to Shuffle while reading the real webhook URL from a mounted Kubernetes Secret.
+- `secrets/README.md` - Lists the required production secrets and the expected Kubernetes secret names/keys.
+
+AWS testing files live outside this production directory:
+
+- `clusters/testing/aws/sealed-secrets/` - Installs the SealedSecrets controller with Flux Helm.
+- `clusters/production/wazuh/` - Wazuh deployment path for the AWS test cluster.
+- `.github/workflows/generate-wazuh-sealed-secrets.yml` - Generates encrypted SealedSecrets from GitHub Actions secrets and opens a PR.
+- `scripts/seal-wazuh-secrets.sh` - Local/CI helper used by the workflow. It does not commit plaintext secrets.
 
 ## Prerequisites
 
-- Azure Kubernetes Service (AKS) or Azure-hosted Kubernetes cluster.
-- Cluster already running and accessible via `kubectl`.
-- Flux v2 installed and configured, or the ability to apply raw Kubernetes manifests.
+- EKS or another AWS Kubernetes cluster with FluxCD installed.
+- AWS EBS CSI driver installed.
+- `kubectl` access to the cluster.
+- A private DNS or internal ingress path for Wazuh dashboard access.
+- Real production secrets for Wazuh API, authd enrollment, cluster key, dashboard, and indexer.
+- Windows endpoints ready for Wazuh agent deployment through Intune, GPO, RMM, or PowerShell.
 
-## GitOps setup with Flux
+## Deployment Steps
 
-### 1. Bootstrap Flux on your Azure cluster
+1. Install the SealedSecrets controller.
 
-If Flux is not yet installed, bootstrap it:
+   Apply the Flux path `clusters/testing/aws/sealed-secrets` before applying Wazuh.
+   This installs the Bitnami SealedSecrets controller.
 
-```bash
-flux bootstrap github \
-  --owner=Dev-Mikael \
-  --repository=wazuh-gitops \
-  --branch=main \
-  --path=clusters/production/wazuh
+2. Generate encrypted SOC platform SealedSecrets.
+
+   Use the GitHub Actions workflow named `Generate SOC Platform SealedSecrets`. It
+   reads GitHub Actions secrets, generates encrypted `SealedSecret` manifests for
+   Wazuh, Shuffle, and DFIR-IRIS, updates the Wazuh indexer bcrypt hashes, and opens
+   a PR.
+
+   Required secret names and keys:
+
+   ```text
+   wazuh-api-cred: username, password
+   wazuh-authd-pass: authd.pass
+   wazuh-cluster-key: key
+   dashboard-cred: username, password
+   indexer-cred: username, password
+   wazuh-shuffle-webhook: hook_url (optional, after Shuffle workflow exists)
+   ```
+
+   Add these in GitHub under:
+
+   ```text
+   Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+   ```
+
+   Required GitHub Actions secret inputs:
+
+   ```text
+   SEALED_SECRETS_PUBLIC_CERT
+   WAZUH_API_USERNAME
+   WAZUH_API_PASSWORD
+   WAZUH_AUTHD_PASS
+   WAZUH_CLUSTER_KEY
+   DASHBOARD_USERNAME
+   DASHBOARD_PASSWORD
+   INDEXER_USERNAME
+   INDEXER_PASSWORD
+   SHUFFLE_OPENSEARCH_PASSWORD
+   SHUFFLE_ENCRYPTION_MODIFIER
+   SHUFFLE_DEFAULT_USERNAME
+   SHUFFLE_DEFAULT_PASSWORD
+   SHUFFLE_DEFAULT_APIKEY
+   DFIR_IRIS_POSTGRES_PASSWORD
+   DFIR_IRIS_POSTGRES_ADMIN_USER
+   DFIR_IRIS_POSTGRES_ADMIN_PASSWORD
+   DFIR_IRIS_SECRET_KEY
+   DFIR_IRIS_SECURITY_PASSWORD_SALT
+   DFIR_IRIS_ADMIN_PASSWORD
+   DFIR_IRIS_ADMIN_API_KEY
+   ```
+
+   Optional after the Shuffle workflow exists:
+
+   ```text
+   SHUFFLE_WEBHOOK_URL
+   ```
+
+   For local testing only, copy `.env.example` to `.env`, fill the values, then run:
+
+   ```bash
+   set -a
+   . ./.env
+   set +a
+   bash scripts/seal-wazuh-secrets.sh
+   ```
+
+   Do not commit `.env`.
+
+3. Replace generated certificates for production.
+
+   The files under `upstream/certs/` were generated from the official Wazuh helper
+   scripts so Kustomize can render and Flux can deploy. For production, regenerate
+   certificates for your environment or replace them with your certificate-management
+   process before first deployment.
+
+4. Confirm storage settings.
+
+   The included storage class uses AWS EBS CSI:
+
+   ```yaml
+   provisioner: ebs.csi.aws.com
+   parameters:
+     type: gp3
+     encrypted: "true"
+   ```
+
+   Change `patches/aws-storage-class.yaml` if your test cluster uses a different
+   AWS storage policy.
+
+5. Confirm private access.
+
+   `patches/clusterip-services.yaml` keeps the dashboard and manager service private.
+   Expose dashboard access with an internal ingress, VPN, bastion, or port-forward.
+
+6. Commit and push.
+
+   Flux should be pointed at this path:
+
+   ```bash
+   clusters/production/wazuh
+   ```
+
+   Flux will build `kustomization.yaml` from the vendored official Wazuh base and
+   apply the local patches.
+
+7. Check Flux and Wazuh status.
+
+   ```bash
+   flux get kustomizations
+   kubectl get pods -n wazuh
+   kubectl get svc -n wazuh
+   kubectl get pvc -n wazuh
+   ```
+
+8. Access the dashboard privately.
+
+   For a quick check:
+
+   ```bash
+   kubectl port-forward -n wazuh svc/dashboard 5601:443
+   ```
+
+   Then open `https://localhost:5601`.
+
+## Integrations
+
+### Shuffle
+
+Wazuh officially supports forwarding alerts to Shuffle with the Wazuh Integrator
+module. The native integration requires the Shuffle hook URL directly inside
+`ossec.conf`, which would leak a secret if committed to Git.
+
+This repo uses a safer production pattern:
+
+- `master.conf` enables a custom integration named `custom-shuffle-secret`.
+- `integrations/custom-shuffle-secret` forwards qualifying Wazuh alerts to Shuffle.
+- The real Shuffle webhook URL is read from the optional Kubernetes Secret named
+  `wazuh-shuffle-webhook`.
+- The sealing script creates that Secret only when `SHUFFLE_WEBHOOK_URL` is present
+  in GitHub Actions secrets.
+
+This keeps the deployment automated without committing the plaintext webhook URL.
+For the AWS test path, Shuffle images are currently referenced with `latest`; pin
+tested tags before a final production handoff.
+
+Recommended flow:
+
+```text
+Wazuh alert -> Shuffle webhook -> enrichment/automation -> DFIR-IRIS case
 ```
 
-### 2. Flux auto-syncs this directory
+### DFIR-IRIS
 
-Once Flux is bootstrapped and watching this repo:
+Use Shuffle as the integration point for DFIR-IRIS. DFIR-IRIS replaces TheHive in
+this design because the current requirement is an open-source case management path
+without a commercial-trial dependency. In Shuffle, create a workflow triggered by the
+Wazuh webhook and add DFIR-IRIS actions or HTTP API calls for alert triage and case
+creation.
 
-- Flux automatically detects the `kustomization.yaml` in this directory.
-- It creates the namespace, adds the Helm repository, and deploys the HelmRelease.
-- The cluster state stays in sync with this git repo.
-- Any changes you push to `main` are automatically applied to the cluster within the sync interval.
+Store these values in the Shuffle secret store or GitHub Actions secrets for workflow
+generation, not in Wazuh ConfigMaps:
 
-### 3. Manual apply (optional)
-
-If you prefer to apply without Flux or need a one-time install:
-
-```bash
-kubectl apply -k clusters/production/wazuh/
+```text
+DFIR_IRIS_URL
+DFIR_IRIS_API_KEY
 ```
 
-## Manual Helm install
+### AlienVault OTX
 
-If you want to install Wazuh manually with Helm instead of Flux:
+Use AlienVault OTX inside the Shuffle workflow for enrichment. This is cleaner than
+placing an OTX API key directly into Wazuh manager config. If you later want native
+Wazuh-side OTX enrichment, implement it as a `custom-*` Wazuh integration script and
+mount that script into the manager.
 
-```bash
-helm repo add wazuh https://packages.wazuh.com/4.x/helm
-helm repo update
-kubectl create namespace wazuh
-helm install wazuh wazuh/wazuh -n wazuh -f clusters/production/wazuh/values.yaml
+Store this value in the Shuffle secret store or GitHub Actions secrets:
+
+```text
+OTX_API_KEY
 ```
 
-## Azure-specific notes
+### Microsoft Defender
 
-- `storageClassName: default` is configured to use the cluster default storage class on AKS.
-- If your Azure cluster requires a named storage class, change the value to `managed-premium` or `managed-standard`.
-- This manifest does not configure a public domain name or DNS record.
-- The Wazuh dashboard is configured as `ClusterIP`, so it is not directly exposed as a public Azure LoadBalancer.
+Microsoft Defender Antivirus logs belong in the Windows endpoint agent group, not in
+the Wazuh manager Helm/Kustomize config.
 
-## Domain-only dashboard access
+Use `agent-groups/windows-endpoints-agent.conf` for the `windows-endpoints` group.
+Wazuh already includes Windows Defender decoders and rules.
 
-This manifest does not create DNS records or an ingress resource automatically.
+This repo now bootstraps that group configuration automatically through
+`patches/agent-group-bootstrap.yaml`.
 
-For access over VPN or a bastion host, keep `dashboard.service.type: ClusterIP` and use one of these approaches:
+### Suricata
 
-### Option 1: Internal ingress behind VPN
+Suricata logs belong on the endpoint where Suricata writes `eve.json`.
 
-- Use your existing ingress controller with an internal-facing load balancer or host.
-- Create an `Ingress` for a private host such as `wazuh.internal.example.com`.
-- Configure DNS so the host resolves only inside the VPN or corporate network.
-- Restrict access at the ingress controller with source IP filtering or firewall rules.
-- Use TLS for secure traffic.
+Use `agent-groups/suricata-endpoints-agent.conf` for Linux Suricata sensors. Wazuh
+parses `/var/log/suricata/eve.json` JSON events and surfaces Suricata alerts in the
+dashboard.
 
-This gives you a real domain name for the dashboard while avoiding public internet exposure.
+This repo now bootstraps that group configuration automatically through
+`patches/agent-group-bootstrap.yaml`.
 
-### Option 2: Bastion host / jumpbox access
+### ClamAV
 
-If you prefer not to expose the dashboard by DNS at all, access it through a bastion host:
+ClamAV is intentionally not configured here because the current focus is Windows
+laptops. Add a separate Linux endpoint group later if ClamAV becomes part of scope.
 
-1. SSH into your bastion host on the private network.
-2. From the bastion, use `kubectl` to connect to the cluster.
-3. Forward the dashboard port locally:
+## Agent Groups And Enrollment
 
-```bash
-ssh -L 5601:localhost:5601 <bastion-host>
+Create these Wazuh groups:
+
+```text
+windows-endpoints
+suricata-endpoints
 ```
 
-4. On the bastion, run:
+You can create and manage groups from the Wazuh dashboard under agent management, or
+through the Wazuh API.
 
-```bash
-kubectl port-forward -n wazuh svc/wazuh-dashboard 5601:5601
+For Windows laptop enrollment, enroll agents directly into the Windows group. The
+agent-side enrollment config should include:
+
+```xml
+<client>
+  <enrollment>
+    <groups>windows-endpoints</groups>
+  </enrollment>
+</client>
 ```
 
-5. Open `http://localhost:5601` from your local machine.
+The group must exist before enrollment, otherwise enrollment into that group can fail.
 
-If the service name differs in your Wazuh deployment, use the actual dashboard service name from `kubectl get svc -n wazuh`.
+## Validation Commands
 
-### Recommended setup
-
-- Use `ClusterIP` for the dashboard service.
-- Use an internal ingress host or private DNS for VPN-only access.
-- Do not expose the dashboard on a public LoadBalancer unless you explicitly need it.
-
-## Flux automation details
-
-- The `kustomization.yaml` orchestrates the Namespace, HelmRepository, and HelmRelease in dependency order.
-- The HelmRelease has an inline `values` section (instead of a separate ConfigMap), making it easier to version and review in git.
-- Flux reconciles every 10 minutes (set by `interval: 10m` in the HelmRelease).
-- If a deployment fails, Flux will retry up to 3 times (set by `install.remediation.retries: 3`).
-- To force an immediate sync, use:
-  ```bash
-  flux reconcile source git <repo-name>
-  flux reconcile kustomization wazuh
-  ```
-- To check the sync status:
-  ```bash
-  flux get kustomizations
-  flux get helmreleases -n wazuh
-  ```
-
-## Admin credentials
-
-Wazuh dashboard credentials are generally created during deployment and stored in a Kubernetes Secret.
-
-1. Find the dashboard-related secret in the `wazuh` namespace:
+Render the manifests locally:
 
 ```bash
-kubectl get secret -n wazuh
+kubectl kustomize clusters/production/wazuh
 ```
 
-2. Look for a secret name containing `dashboard` or `wazuh-dashboard`.
-
-3. Decode the secret data for the admin password:
+Apply manually if Flux is not being used:
 
 ```bash
-kubectl get secret <secret-name> -n wazuh -o jsonpath="{.data.admin-password}" | base64 --decode
+kubectl apply -k clusters/production/wazuh
 ```
 
-4. The dashboard admin username is typically `admin`.
-
-If the secret key is different, inspect the secret contents:
+Force Flux reconciliation:
 
 ```bash
-kubectl get secret <secret-name> -n wazuh -o yaml
+flux reconcile kustomization wazuh
 ```
 
-## Customization
+## AWS Test Flow
 
-- Update `values.yaml` for CPU/memory, replica count, or storage sizes.
-- If you need internal dashboard access only, change `dashboard.service.type` to `ClusterIP` or use an ingress controller.
-- If using Flux, keep `helm-release.yaml`, `helm-repository.yaml`, and `wazuh-values-configmap.yaml` together in the same repo path.
+Use this path for a temporary AWS Kubernetes test cluster:
+
+```text
+clusters/testing/aws/sealed-secrets
+clusters/testing/aws/wazuh
+clusters/testing/aws/shuffle
+clusters/testing/aws/dfir-iris
+```
+
+The intended order is:
+
+1. Flux applies `clusters/testing/aws/sealed-secrets` first.
+2. The SealedSecrets controller creates or uses its sealing key.
+3. Store the controller public certificate in the GitHub Actions secret named `SEALED_SECRETS_PUBLIC_CERT`.
+4. Store the Wazuh, Shuffle, and DFIR-IRIS secret values as GitHub Actions secrets.
+5. Run the `Generate SOC Platform SealedSecrets` workflow.
+6. Review and merge the generated PR containing only encrypted `SealedSecret` manifests.
+7. Flux applies `clusters/testing/aws/wazuh`, then `clusters/testing/aws/shuffle`,
+   then `clusters/testing/aws/dfir-iris`.
+
+This keeps the deployment automated after merge. The only sensitive values live in
+GitHub Actions secrets and inside the cluster; plaintext is not committed.
+
+Do not use a committed `.env` for production or boss-facing handoff. A `.env` file is
+acceptable only as a local throwaway input while generating SealedSecrets, and it must
+stay in `.gitignore`. For production-grade GitOps, prefer SealedSecrets, SOPS with
+age/KMS, External Secrets Operator with AWS Secrets Manager, or another managed secret
+store. Since your stated choice is SealedSecrets, keep the real values in GitHub
+Actions secrets and commit only encrypted `SealedSecret` YAML.
+
+## References
+
+- Official Wazuh Kubernetes manifests: `https://github.com/wazuh/wazuh-kubernetes`
+- Wazuh external integrations: `https://documentation.wazuh.com/current/user-manual/manager/integration-with-external-apis.html`
+- Wazuh Windows Defender collection: `https://documentation.wazuh.com/current/user-manual/capabilities/malware-detection/win-defender-logs-collection.html`
+- Wazuh Suricata integration: `https://documentation.wazuh.com/current/proof-of-concept-guide/integrate-network-ids-suricata.html`
+- Shuffle self-hosted install guide: `https://github.com/Shuffle/Shuffle/blob/main/.github/install-guide.md`
+- DFIR-IRIS documentation: `https://docs.dfir-iris.org/`

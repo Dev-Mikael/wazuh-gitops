@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dfir-iris-app
+  namespace: dfir-iris
+spec:
+  type: ClusterIP
+  selector:
+    app: dfir-iris-app
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dfir-iris-app
+  namespace: dfir-iris
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dfir-iris-app
+  template:
+    metadata:
+      labels:
+        app: dfir-iris-app
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/dfir-iris/iriswebapp_app:v2.4.27
+          command: ["./iris-entrypoint.sh", "iriswebapp"]
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: dfir-iris-config
+            - secretRef:
+                name: dfir-iris-secrets
+          volumeMounts:
+            - name: downloads
+              mountPath: /home/iris/downloads
+            - name: user-templates
+              mountPath: /home/iris/user_templates
+            - name: server-data
+              mountPath: /home/iris/server_data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: downloads
+          persistentVolumeClaim:
+            claimName: dfir-iris-downloads
+        - name: user-templates
+          persistentVolumeClaim:
+            claimName: dfir-iris-user-templates
+        - name: server-data
+          persistentVolumeClaim:
+            claimName: dfir-iris-server-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dfir-iris-downloads
+  namespace: dfir-iris
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: wazuh-storage
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dfir-iris-user-templates
+  namespace: dfir-iris
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: wazuh-storage
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dfir-iris-server-data
+  namespace: dfir-iris
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: wazuh-storage
+  resources:
+    requests:
+      storage: 20Gi
