@@ -1,23 +1,42 @@
-# AWS Wazuh Deployment Runbook
+# AWS EKS Wazuh Deployment Runbook
 
-This guide explains the whole setup in simple language, then gives the technical
-details you need to explain it to your boss.
+This is the child-level, boss-facing guide for the AWS test deployment.
 
 Important naming note: AWS does not have AKS. AKS is Azure Kubernetes Service. On
 AWS, the managed Kubernetes service is EKS. This runbook is for AWS EKS.
 
-## What We Are Building
+## Current Scope
 
-We are building a private Wazuh security monitoring platform on AWS Kubernetes.
+The active deployment now focuses on:
 
-Wazuh will receive logs and security events from BIGMODS endpoints. The first endpoint
-scope is:
+- Wazuh on AWS EKS.
+- 8 BIGMODS Windows laptops enrolled into Wazuh.
+- Microsoft Defender event collection from those laptops.
+- Sysmon telemetry from those laptops.
+- AlienVault OTX enrichment through a sealed API key.
+- Dashboard access only through private/VPN access.
 
-```text
-8 BIGMODS Windows laptops
-```
+Shuffle and DFIR-IRIS are pended. Their folders remain in the repo for a later
+SOAR/case-management phase, but the active Flux path does not deploy them.
 
-The target outcome is:
+## Simple Mental Model
+
+Think of the setup like a secure office:
+
+- AWS EKS is the building.
+- Kubernetes nodes are the rooms where services run.
+- Flux is the worker that reads Git and installs what Git says.
+- SealedSecrets is the locked safe for passwords and API keys.
+- Wazuh manager is the security desk.
+- Wazuh indexer is the filing cabinet for security events.
+- Wazuh dashboard is the screen the SOC team uses.
+- Wazuh agents are reporters installed on the laptops.
+- Microsoft Defender is the Windows antivirus/security event source.
+- Sysmon is the deep Windows activity recorder.
+- AlienVault OTX is the threat-intelligence lookup service.
+- VPN is the locked front gate for dashboard access.
+
+The active flow is:
 
 ```text
 Windows laptops
@@ -25,213 +44,203 @@ Windows laptops
   -> Wazuh manager
   -> Wazuh indexer
   -> Wazuh dashboard
-  -> Shuffle
-  -> AlienVault OTX enrichment
-  -> DFIR-IRIS alert/case
 
-Windows laptop network traffic
-  -> VPN / office gateway / inspection path
-  -> Suricata network IDS sensor
-  -> Wazuh dashboard
+High-severity Wazuh alerts
+  -> custom AlienVault OTX integration
+  -> OTX API lookup
+  -> manager-side enrichment/logging
 ```
 
-## Child-Level Mental Model
-
-Think of this like a secured office.
-
-- AWS EKS is the building.
-- FluxCD is the worker that reads our Git repository and installs what the repo says.
-- SealedSecrets is the locked safe. It lets us keep encrypted secrets in Git.
-- Wazuh is the security desk.
-- Wazuh agents are the security reporters installed on laptops.
-- Suricata is the network camera watching traffic from the laptops.
-- Shuffle is the automation assistant.
-- AlienVault OTX is the threat intelligence lookup book.
-- DFIR-IRIS is the incident case notebook.
-- VPN is the front gate. Nobody should reach the dashboard from the public internet.
-
-The safe order is:
+For network IDS:
 
 ```text
-Build AWS EKS
-  -> Install Flux
-  -> Install SealedSecrets
-  -> Generate encrypted SOC platform secrets
-  -> Deploy Wazuh
-  -> Deploy self-hosted Shuffle
-  -> Deploy self-hosted DFIR-IRIS
-  -> Enroll the 8 Windows laptops
-  -> Put Suricata on the laptop traffic path
-  -> Send Wazuh alerts to Shuffle
-  -> Shuffle enriches with OTX
-  -> Shuffle creates alerts or cases in DFIR-IRIS
+Laptop traffic
+  -> office/VPN/SASE/network inspection path
+  -> Suricata or managed NIDS sensor
+  -> Wazuh
 ```
 
-## Current Action Point Status
+Suricata is not installed on the Windows laptops. It belongs on a network point that
+can see the laptop traffic.
 
-| Action point | Status in this repo | Remaining work |
+## Action Point Status
+
+| Action point | Repo status | Remaining operational work |
 |---|---|---|
-| Enroll all 8 BIGMODS Windows laptops onto Wazuh | Supported by the Wazuh deployment and `windows-endpoints` group config | Install Wazuh agent on each laptop and enroll each one into `windows-endpoints` |
-| Set up group configuration so settings push automatically | Implemented by `patches/agent-group-bootstrap.yaml` and `agent-groups/windows-endpoints-agent.conf` | Verify each agent shows `group_config_status: synced` |
-| Ensure Wazuh dashboard is VPN-only, not public | Kubernetes services are patched to `ClusterIP`, so no public LoadBalancer is created | Provide VPN/private network path, such as AWS Client VPN plus internal ingress or bastion |
-| Satisfy network IDS control for Windows endpoint traffic | Wazuh is ready to ingest Suricata `eve.json` from the `suricata-sensors` group | Place a Suricata sensor or AWS Network Firewall on the Windows laptop traffic path |
+| Enrol all 8 BIGMODS Windows laptops onto Wazuh | Supported | Install Wazuh agent on each laptop and enroll into `windows-endpoints` |
+| Push group settings automatically | Implemented | Verify every agent shows synced group config |
+| Wazuh dashboard VPN-only | Implemented at Kubernetes service level with `ClusterIP` | Provide VPN/private ingress/bastion path |
+| Microsoft Defender telemetry | Implemented in Windows group config | Confirm Defender events arrive after laptop enrollment |
+| AlienVault OTX | Implemented as optional custom integration | Add real `OTX_API_KEY` and regenerate SealedSecrets |
+| Network IDS control | Prepared with Suricata sensor group | Deploy a sensor or use managed NIDS where laptop traffic passes |
 
 ## Repository Layout
 
-AWS testing has four entrypoints:
+Active AWS test path:
 
 ```text
-clusters/testing/aws/sealed-secrets
-clusters/testing/aws/wazuh
-clusters/testing/aws/shuffle
-clusters/testing/aws/dfir-iris
+clusters/testing/aws
 ```
 
-The actual Wazuh files live here:
+Active production Wazuh path:
 
 ```text
 clusters/production/wazuh
 ```
 
-That may look odd at first, but it keeps one source of truth for Wazuh. The AWS test
-folder points to that Wazuh deployment instead of copying it.
+Optional, pended paths:
 
-## File-By-File Walkthrough
+```text
+clusters/testing/aws/shuffle
+clusters/testing/aws/dfir-iris
+```
+
+## File Walkthrough
+
+### `wazuh-cluster.yaml`
+
+This is the `eksctl` cluster definition for the AWS test cluster.
+
+It creates:
+
+- EKS cluster named `wazuh-soc`.
+- Region `us-east-1`.
+- Kubernetes version `1.35`.
+- OIDC enabled for AWS IAM integration.
+- Public and private API endpoint access.
+- CloudWatch control-plane logs for API, audit, and authenticator.
+- 3 managed worker nodes, scaling up to 5.
+- Private worker-node networking.
+- Encrypted `gp3` node volumes.
+- EKS add-ons including VPC CNI, CoreDNS, kube-proxy, metrics-server, and EBS CSI.
+
+Current node choices:
+
+```text
+m6i.xlarge
+m6a.xlarge
+m7i.xlarge
+m7a.xlarge
+```
+
+These are enough for Wazuh testing. For a heavier demo or long-running production
+pilot, move to `m6i.2xlarge` or similar.
+
+### `clusters/testing/aws/kustomization.yaml`
+
+This is the root Kustomize file used by Flux bootstrap.
+
+It does not deploy Wazuh directly. It applies:
+
+```text
+flux-kustomizations.yaml
+```
+
+That gives Flux ordered deployment control.
+
+### `clusters/testing/aws/flux-kustomizations.yaml`
+
+This creates two Flux Kustomizations:
+
+- `sealed-secrets`
+- `wazuh`
+
+The `wazuh` Kustomization depends on `sealed-secrets`, so Flux installs the secret
+controller before applying Wazuh's encrypted secrets.
+
+This is the GitOps-native automation path.
 
 ### `clusters/testing/aws/sealed-secrets/`
 
-This installs the SealedSecrets controller.
+This installs the Bitnami SealedSecrets controller by Flux HelmRelease.
+
+Files:
 
 - `namespace.yaml` creates the `sealed-secrets` namespace.
-- `helm-repository.yaml` tells Flux where the SealedSecrets Helm chart is.
-- `helm-release.yaml` tells Flux to install the SealedSecrets controller.
-- `kustomization.yaml` groups those files together.
-
-SealedSecrets must be installed before Wazuh because Wazuh needs secrets such as API
-passwords, enrollment password, dashboard password, and indexer password.
+- `helm-repository.yaml` tells Flux where the chart is.
+- `helm-release.yaml` installs the controller.
+- `kustomization.yaml` groups those files.
 
 ### `clusters/testing/aws/wazuh/kustomization.yaml`
 
-This is a small pointer file.
-
-It tells Kustomize:
+This points to the real Wazuh deployment:
 
 ```text
-Use ../../../production/wazuh
+../../../production/wazuh
 ```
 
-That means the AWS test path deploys the main Wazuh deployment without copying it.
+This keeps one source of truth for Wazuh.
 
 ### `clusters/production/wazuh/kustomization.yaml`
 
 This is the main Wazuh build file.
 
-It does five important things:
+It:
 
-1. Loads the official Wazuh Kubernetes manifests from `upstream/`.
-2. Loads encrypted SealedSecrets from `secrets/sealed/`.
-3. Creates a ConfigMap containing endpoint group configs.
-4. Applies AWS storage and service patches.
-5. Applies the bootstrap patch that writes group configs into Wazuh.
+- Loads the official Wazuh Kubernetes base from `upstream/`.
+- Loads encrypted secrets from `secrets/sealed/`.
+- Creates ConfigMaps for agent groups and custom integrations.
+- Applies AWS storage, private service, resource, secret, and bootstrap patches.
 
 ### `clusters/production/wazuh/upstream/`
 
 This is a vendored copy of the official Wazuh Kubernetes manifests.
 
-It contains the base Wazuh objects:
+It contains:
 
-- Namespace.
-- Wazuh manager master.
-- Wazuh manager workers.
-- Wazuh indexer.
-- Wazuh dashboard.
-- Default services.
-- Default config.
-- Generated local certificates.
+- Wazuh namespace.
+- Manager master StatefulSet.
+- Manager worker StatefulSet.
+- Indexer StatefulSet.
+- Dashboard Deployment.
+- Wazuh services.
+- Wazuh default configuration files.
+- Certificates generated from the official helper scripts.
 
-We keep this close to the official upstream layout. Local changes are mostly done in
-`patches/`.
+Keep direct edits here small. Prefer patches in `patches/`.
 
 ### `patches/aws-storage-class.yaml`
 
-This changes Wazuh storage to AWS EBS CSI:
+This changes Wazuh storage to encrypted AWS EBS `gp3`.
 
-```yaml
-provisioner: ebs.csi.aws.com
-parameters:
-  type: gp3
-  encrypted: "true"
-```
-
-Wazuh uses persistent disks for the indexer and manager data. In the current patch,
-the rendered storage is:
+Current Wazuh PVC shape:
 
 ```text
-3 x Wazuh indexer PVCs: 50Gi each
-1 x Wazuh manager master PVC: 50Gi
-2 x Wazuh manager worker PVCs: 50Gi each
+3 x indexer PVCs: 50Gi each
+1 x manager master PVC: 50Gi
+2 x manager worker PVCs: 50Gi each
 ```
 
-Expected Wazuh PVC total:
+Total declared Wazuh PVC storage:
 
 ```text
 300Gi
 ```
 
-The full SOC test stack adds more storage:
-
-```text
-Shuffle OpenSearch PVC: 50Gi
-Shuffle files PVC: 20Gi
-DFIR-IRIS PostgreSQL PVC: 20Gi
-DFIR-IRIS downloads PVC: 20Gi
-DFIR-IRIS user templates PVC: 5Gi
-DFIR-IRIS server data PVC: 20Gi
-```
-
-Expected declared PVC total for Wazuh + Shuffle + DFIR-IRIS:
-
-```text
-435Gi
-```
-
 ### `patches/clusterip-services.yaml`
 
-This is the VPN-only safety patch.
+This is the dashboard privacy control.
 
-The official upstream manifests use public-style `LoadBalancer` services in some
-places. This patch changes Wazuh services to:
+It changes Wazuh services to:
 
 ```text
 ClusterIP
 ```
 
-That means Kubernetes will not create a public AWS load balancer for:
+That means Kubernetes does not create a public AWS load balancer for the Wazuh
+dashboard.
 
-- Wazuh dashboard.
-- Wazuh manager API/enrollment.
-- Wazuh workers.
-- Wazuh indexer.
+To access the dashboard, use:
 
-This helps satisfy:
-
-```text
-Ensure Wazuh dashboard is accessible only via VPN, not publicly exposed.
-```
-
-Important: `ClusterIP` also means users and laptops outside the cluster cannot reach
-Wazuh unless there is a private network path. For real testing, use one of these:
-
-- AWS Client VPN into the VPC.
-- Site-to-site VPN into the VPC.
-- Bastion host with port-forwarding.
-- Internal ALB/NLB reachable only from VPN/private CIDRs.
+- AWS Client VPN plus internal ingress.
+- Site-to-site VPN plus internal ingress.
+- Bastion host with port-forward for testing.
 
 ### `patches/production-resources.yaml`
 
-This sets CPU, memory, and disk sizing.
+This sets CPU, memory, and disk sizes for Wazuh.
 
-Current rendered workload shape:
+Current workload shape:
 
 | Component | Replicas | Request per pod | Limit per pod | PVC |
 |---|---:|---:|---:|---:|
@@ -240,36 +249,18 @@ Current rendered workload shape:
 | Wazuh manager worker | 2 | 1 CPU, 1Gi RAM | 2 CPU, 2Gi RAM | 50Gi each |
 | Wazuh dashboard | 1 | 500m CPU, 1Gi RAM | 1 CPU, 2Gi RAM | none |
 
-For an AWS test cluster running the full stack, use at least:
-
-```text
-3 worker nodes
-Recommended instance size: m6i.2xlarge, m6a.2xlarge, or similar
-Minimum usable shape: 8 vCPU and 32Gi RAM per node
-Storage: at least 500Gi gp3 total for declared PVCs and working headroom
-```
-
-For a more comfortable demo to leadership:
-
-```text
-3 worker nodes
-Recommended instance size: m6i.2xlarge or m6a.2xlarge
-Storage: 700Gi gp3 budget allowance
-```
-
 ### `patches/delete-default-secrets.yaml`
 
-The official upstream Wazuh manifests include example Kubernetes Secrets.
+The official Wazuh manifests include example Kubernetes Secrets.
 
-That is not acceptable for a production-grade or boss-facing setup, so this patch
-removes those example Secrets. The real secrets come from encrypted SealedSecrets.
+This patch removes them so public defaults are not deployed. Real values come from
+SealedSecrets.
 
 ### `secrets/sealed/`
 
-This folder receives generated encrypted SealedSecrets.
+This folder contains encrypted Wazuh SealedSecrets after generation.
 
-At first, it is empty except for its own `kustomization.yaml` and README. After the
-GitHub Actions workflow runs, this folder should contain encrypted YAML files like:
+Expected files:
 
 ```text
 wazuh-api-cred.yaml
@@ -279,24 +270,29 @@ dashboard-cred.yaml
 indexer-cred.yaml
 ```
 
-These are safe to commit because they are encrypted for your cluster's SealedSecrets
-controller.
+Optional:
+
+```text
+wazuh-otx-api-key.yaml
+```
+
+These encrypted files are safe to commit because only the cluster's SealedSecrets
+private key can decrypt them.
 
 ### `.github/workflows/generate-wazuh-sealed-secrets.yml`
 
-This is the automation that generates encrypted secrets.
+This workflow automates encrypted secret generation.
 
-It reads plaintext values from GitHub Actions secrets, runs the sealing script, and
-opens a pull request with encrypted SealedSecrets.
+It reads plaintext from GitHub Actions secrets, runs `scripts/seal-wazuh-secrets.sh`,
+and opens a PR with encrypted manifests.
 
-Plaintext values are not committed.
+Plaintext is not committed.
 
 ### `scripts/seal-wazuh-secrets.sh`
 
-This script creates temporary Kubernetes Secret YAML locally inside a temp directory,
-passes it to `kubeseal`, and writes encrypted SealedSecret YAML.
+This is the sealing helper used by CI and local testing.
 
-It requires these inputs:
+Required inputs:
 
 ```text
 KUBESEAL_CERT
@@ -308,36 +304,20 @@ DASHBOARD_USERNAME
 DASHBOARD_PASSWORD
 INDEXER_USERNAME
 INDEXER_PASSWORD
-SHUFFLE_OPENSEARCH_PASSWORD
-SHUFFLE_ENCRYPTION_MODIFIER
-SHUFFLE_DEFAULT_USERNAME
-SHUFFLE_DEFAULT_PASSWORD
-SHUFFLE_DEFAULT_APIKEY
-DFIR_IRIS_POSTGRES_PASSWORD
-DFIR_IRIS_POSTGRES_ADMIN_USER
-DFIR_IRIS_POSTGRES_ADMIN_PASSWORD
-DFIR_IRIS_SECRET_KEY
-DFIR_IRIS_SECURITY_PASSWORD_SALT
-DFIR_IRIS_ADMIN_PASSWORD
-DFIR_IRIS_ADMIN_API_KEY
 ```
 
-For GitHub Actions, these are GitHub Actions secrets.
+Optional input:
 
-For local testing only, copy `.env.example` to `.env`, fill it, and run:
-
-```bash
-set -a
-. ./.env
-set +a
-bash scripts/seal-wazuh-secrets.sh
+```text
+OTX_API_KEY
 ```
 
-Never commit `.env`.
+If `OTX_API_KEY` exists, the script creates the encrypted `wazuh-otx-api-key`
+SealedSecret. If it does not exist, Wazuh still deploys without OTX lookups.
 
 ### `agent-groups/windows-endpoints-agent.conf`
 
-This is the group config for the 8 BIGMODS Windows laptops.
+This is the group config for the 8 Windows laptops.
 
 It collects:
 
@@ -346,15 +326,15 @@ Microsoft-Windows-Windows Defender/Operational
 Microsoft-Windows-Sysmon/Operational
 ```
 
-This is how Microsoft Defender events get into Wazuh.
+Every Windows laptop should be enrolled into:
+
+```text
+windows-endpoints
+```
 
 ### `agent-groups/suricata-sensors-agent.conf`
 
-This is the group config for dedicated Suricata network IDS sensors.
-
-Important: this does not mean the Windows laptops become Linux endpoints. It means a
-separate network sensor watches traffic from or to the Windows laptops and sends its
-Suricata alerts to Wazuh.
+This is for future or separate NIDS sensors.
 
 It collects:
 
@@ -362,207 +342,57 @@ It collects:
 /var/log/suricata/eve.json
 ```
 
-This matters only for systems that actually run Suricata and can see the network
-traffic you need to monitor.
+Only use this group for Linux systems or appliances that actually run Suricata.
 
 ### `patches/agent-group-bootstrap.yaml`
 
-This patch adds an init container to the Wazuh manager master.
-
-When the manager starts, the init container writes:
+This patch writes Wazuh group configs into the manager master pod at startup:
 
 ```text
 /var/ossec/etc/shared/windows-endpoints/agent.conf
 /var/ossec/etc/shared/suricata-sensors/agent.conf
 ```
 
-That is important because Wazuh pushes group files from:
+That is how Wazuh automatically pushes group settings to agents.
+
+It also installs the custom AlienVault OTX integration script into:
 
 ```text
-/var/ossec/etc/shared/<GROUP_NAME>/agent.conf
+/var/ossec/integrations/custom-alienvault-secret
 ```
 
-to agents in that group.
+### `integrations/custom-alienvault-secret`
 
-This satisfies:
+This is the custom Wazuh integration script.
 
-```text
-Set up group configuration so settings push to all endpoints automatically.
-```
+It:
+
+- Reads the OTX API key from `/var/ossec/secrets/otx/api_key`.
+- Extracts IPs, hashes, URLs, and domains from high-severity Wazuh alerts.
+- Queries AlienVault OTX.
+- Logs OTX matches from the manager integration path.
 
 ### `integrations/manager-integrations.xml`
 
-This file documents the Wazuh-to-Shuffle integration that is applied in
-`upstream/wazuh_managers/wazuh_conf/master.conf`.
+This documents the active integration block in Wazuh manager config.
 
-The repo uses a custom Wazuh integration named `custom-shuffle-secret`. It avoids
-putting the Shuffle webhook URL directly in `ossec.conf`. Instead, the script reads
-the URL from a mounted Kubernetes Secret named `wazuh-shuffle-webhook`.
-
-The design is:
+The real applied block is in:
 
 ```text
-Wazuh sends alerts to Shuffle
-Shuffle enriches with AlienVault OTX
-Shuffle creates alerts/cases in DFIR-IRIS
+upstream/wazuh_managers/wazuh_conf/master.conf
 ```
 
-### `clusters/testing/aws/shuffle/`
+## Secrets: How Inputs Work
 
-This deploys self-hosted Shuffle.
+For production-grade GitOps, use GitHub Actions secrets.
 
-Files:
-
-- `namespace.yaml` creates the `shuffle` namespace.
-- `configmap.yaml` holds non-secret Shuffle settings.
-- `serviceaccount.yaml` creates the service account used by Orborus.
-- `rbac.yaml` allows Orborus to create workflow execution pods/jobs in the `shuffle` namespace.
-- `opensearch.yaml` deploys Shuffle's OpenSearch database.
-- `backend.yaml` deploys the Shuffle backend API.
-- `frontend.yaml` deploys the Shuffle UI.
-- `orborus.yaml` deploys Orborus, the component that runs workflow executions.
-- `secrets/sealed/` receives encrypted Shuffle secrets.
-
-All Shuffle services are `ClusterIP`, so Shuffle is private by default. Expose the
-Shuffle UI only through VPN/private ingress.
-
-### `clusters/testing/aws/dfir-iris/`
-
-This deploys DFIR-IRIS for case management.
-
-Files:
-
-- `namespace.yaml` creates the `dfir-iris` namespace.
-- `configmap.yaml` holds non-secret IRIS settings.
-- `postgres.yaml` deploys the IRIS PostgreSQL database.
-- `rabbitmq.yaml` deploys RabbitMQ for IRIS background jobs.
-- `app.yaml` deploys the IRIS web application.
-- `worker.yaml` deploys the IRIS background worker.
-- `secrets/sealed/` receives encrypted DFIR-IRIS secrets.
-
-All DFIR-IRIS services are `ClusterIP`, so IRIS is private by default. Expose the
-IRIS UI only through VPN/private ingress.
-
-## AWS EKS Test Cluster Design
-
-For the test environment, use AWS EKS.
-
-Minimum practical setup:
+Go to:
 
 ```text
-Kubernetes: supported EKS version approved by your organization
-Worker nodes: 3 nodes
-Instance type: m6i.2xlarge or m6a.2xlarge
-Storage driver: AWS EBS CSI driver
-Storage class: wazuh-storage using encrypted gp3
-Network: private subnets preferred
-Access: VPN or private bastion
-Public Wazuh/Shuffle/DFIR-IRIS exposure: none
+Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-Recommended demo setup:
-
-```text
-Worker nodes: 3 nodes
-Instance type: m6i.2xlarge or m6a.2xlarge
-Storage allowance: 700Gi gp3
-Ingress: internal only
-Wazuh dashboard access: VPN only
-Shuffle UI access: VPN only
-DFIR-IRIS UI access: VPN only
-Agent access: VPN/private path only
-```
-
-Required EKS add-ons:
-
-```text
-Amazon VPC CNI
-CoreDNS
-kube-proxy
-Amazon EBS CSI driver
-```
-
-Optional but useful:
-
-```text
-AWS Load Balancer Controller, if using internal ALB/NLB
-ExternalDNS, if managing private Route 53 records
-cert-manager, if issuing TLS certificates through Kubernetes
-```
-
-## Network Design
-
-There are two kinds of access:
-
-1. Human access to the dashboard.
-2. Agent access from laptops to the Wazuh manager.
-
-### Dashboard Access
-
-The dashboard must not be public.
-
-Current repo setting:
-
-```text
-dashboard service = ClusterIP
-```
-
-That means there is no public AWS load balancer for the dashboard.
-
-Recommended access choices:
-
-| Option | Use case |
-|---|---|
-| AWS Client VPN + internal ingress | Best for normal team access |
-| Site-to-site VPN + internal ingress | Best if the office network already has VPN to AWS |
-| Bastion + kubectl port-forward | Good for testing, not ideal for daily SOC use |
-
-### Agent Access
-
-The 8 Windows laptops need to reach Wazuh on:
-
-```text
-1514/TCP - agent events
-1515/TCP - agent enrollment
-```
-
-The Wazuh dashboard/API also uses:
-
-```text
-55000/TCP - Wazuh API
-443/TCP or 5601/TCP - dashboard path, depending on ingress design
-```
-
-Because services are `ClusterIP`, laptops cannot connect directly from the internet.
-For enrollment, provide a private path:
-
-- Laptop connects to VPN.
-- VPN can route to an internal Wazuh endpoint.
-- Internal endpoint forwards to Wazuh manager services.
-
-For a simple test, a bastion and port-forward can prove the dashboard works, but it
-is not enough for all endpoint agents. For all 8 laptops, use VPN/private endpoint
-access.
-
-## SealedSecrets Setup
-
-The SealedSecrets controller has a private key inside the cluster and a public
-certificate that we use to encrypt secrets.
-
-The safe flow is:
-
-```text
-Install SealedSecrets controller
-  -> get public certificate
-  -> store public certificate in GitHub Actions secret
-  -> store Wazuh, Shuffle, and DFIR-IRIS secret inputs in GitHub Actions secrets
-  -> run workflow
-  -> commit encrypted SealedSecrets
-  -> Flux applies them
-  -> controller creates real Kubernetes Secrets
-```
-
-GitHub Actions secrets to create:
+Create:
 
 ```text
 SEALED_SECRETS_PUBLIC_CERT
@@ -574,546 +404,295 @@ DASHBOARD_USERNAME
 DASHBOARD_PASSWORD
 INDEXER_USERNAME
 INDEXER_PASSWORD
-SHUFFLE_OPENSEARCH_PASSWORD
-SHUFFLE_ENCRYPTION_MODIFIER
-SHUFFLE_DEFAULT_USERNAME
-SHUFFLE_DEFAULT_PASSWORD
-SHUFFLE_DEFAULT_APIKEY
-DFIR_IRIS_POSTGRES_PASSWORD
-DFIR_IRIS_POSTGRES_ADMIN_USER
-DFIR_IRIS_POSTGRES_ADMIN_PASSWORD
-DFIR_IRIS_SECRET_KEY
-DFIR_IRIS_SECURITY_PASSWORD_SALT
-DFIR_IRIS_ADMIN_PASSWORD
-DFIR_IRIS_ADMIN_API_KEY
 ```
 
-Optional GitHub Actions secret after the Shuffle workflow exists:
+Optional:
 
 ```text
-SHUFFLE_WEBHOOK_URL
+OTX_API_KEY
 ```
 
-Recommended values:
+Do not use a committed `.env` file for production. A `.env` file is only a local,
+temporary convenience for generating SealedSecrets during testing.
+
+## GitHub Token Rule
+
+Do not paste GitHub tokens into chat, tickets, README files, or commits.
+
+For Flux bootstrap, create a fresh token locally and export it in your terminal only:
+
+```bash
+export GITHUB_TOKEN="<new-token-created-locally>"
+```
+
+Then run Flux bootstrap from that same terminal. Revoke any token that was pasted
+into chat.
+
+## Deployment Flow From Start To Finish
+
+### Phase 1 - Create EKS
+
+Use custom configuration, not quick configuration, because this deployment needs:
+
+- OIDC.
+- EBS CSI.
+- Private worker nodes.
+- Explicit node sizing.
+- Control-plane logging.
+- Predictable storage.
+
+Create the cluster:
+
+```bash
+eksctl create cluster -f wazuh-cluster.yaml --timeout 60m
+```
+
+Verify:
+
+```bash
+kubectl get nodes -o wide
+kubectl get pods -A
+```
+
+### Phase 2 - Bootstrap Flux
+
+For full GitOps, use a fresh GitHub token locally, then:
+
+```bash
+flux bootstrap github \
+  --owner=Dev-Mikael \
+  --repository=wazuh-gitops \
+  --branch=main \
+  --path=clusters/testing/aws \
+  --personal
+```
+
+This connects the cluster to the Git repo. Flux then reads:
 
 ```text
-WAZUH_API_USERNAME=wazuh-wui
-WAZUH_API_PASSWORD=<long random password>
-WAZUH_AUTHD_PASS=<long random enrollment password>
-WAZUH_CLUSTER_KEY=<32+ character random shared key>
-DASHBOARD_USERNAME=kibanaserver
-DASHBOARD_PASSWORD=<long random password>
-INDEXER_USERNAME=admin
-INDEXER_PASSWORD=<long random password>
-SHUFFLE_OPENSEARCH_PASSWORD=<long random password>
-SHUFFLE_ENCRYPTION_MODIFIER=<long random secret string>
-SHUFFLE_DEFAULT_USERNAME=soc-admin
-SHUFFLE_DEFAULT_PASSWORD=<long random password>
-SHUFFLE_DEFAULT_APIKEY=<long random API key>
-DFIR_IRIS_POSTGRES_PASSWORD=<long random database password>
-DFIR_IRIS_POSTGRES_ADMIN_USER=raptor
-DFIR_IRIS_POSTGRES_ADMIN_PASSWORD=<long random database admin password>
-DFIR_IRIS_SECRET_KEY=<long random secret string>
-DFIR_IRIS_SECURITY_PASSWORD_SALT=<long random salt>
-DFIR_IRIS_ADMIN_PASSWORD=<long random password>
-DFIR_IRIS_ADMIN_API_KEY=<long random API key>
+clusters/testing/aws/kustomization.yaml
 ```
 
-## Shuffle, DFIR-IRIS, And AlienVault OTX
-
-This is the part that can be confusing, so here is the plain version.
-
-Wazuh does not need to talk directly to DFIR-IRIS or AlienVault OTX.
-
-Wazuh only needs to send alerts to Shuffle.
-
-Shuffle then becomes the automation brain:
+and creates ordered deployment objects from:
 
 ```text
-Wazuh alert enters Shuffle
-  -> Shuffle extracts IPs, domains, URLs, hashes, username, hostname, rule ID, severity
-  -> Shuffle asks AlienVault OTX whether indicators are suspicious
-  -> Shuffle creates an alert or case in DFIR-IRIS
-  -> SOC analyst works the case in DFIR-IRIS
+clusters/testing/aws/flux-kustomizations.yaml
 ```
 
-### How To Set Up Shuffle
+### Phase 3 - Install SealedSecrets
 
-Shuffle can be self-hosted or cloud-hosted. This repo now includes a self-hosted
-Shuffle deployment at:
+Flux applies:
 
 ```text
-clusters/testing/aws/shuffle
+clusters/testing/aws/sealed-secrets
 ```
 
-Flux should apply it after SealedSecrets and after the shared AWS storage class exists.
+Wait until the controller is ready.
 
-Basic setup:
+Fetch the public certificate:
 
-1. Deploy `clusters/testing/aws/shuffle`.
-2. Access Shuffle through VPN/private ingress.
-3. Log in with the seeded admin credentials if the running Shuffle version accepts
-   them. If Shuffle asks for first-admin setup, create the admin user there and store
-   the final credentials in the team password vault.
-4. Go to `Workflows`.
-5. Create a workflow named `Wazuh Alert Triage`.
-6. Add a `Webhook` trigger.
-7. Copy the webhook URL.
-8. Start or enable the webhook trigger.
-9. Save the workflow.
-10. Add the webhook URL as the GitHub Actions secret `SHUFFLE_WEBHOOK_URL`.
-11. Run the `Generate SOC Platform SealedSecrets` workflow again.
-12. Merge the generated PR so Flux creates the `wazuh-shuffle-webhook` Secret.
+```bash
+kubeseal \
+  --controller-name sealed-secrets-controller \
+  --controller-namespace sealed-secrets \
+  --fetch-cert \
+  > /tmp/sealed-secrets-public-cert.pem
+```
 
-The webhook URL is the value Wazuh needs.
-
-It looks like:
+Store that public certificate as:
 
 ```text
-https://<shuffle-host>/api/v1/hooks/<webhook-id>
+SEALED_SECRETS_PUBLIC_CERT
 ```
 
-Because Wazuh and Shuffle both run inside Kubernetes, prefer an internal URL for the
-GitHub Actions secret when possible:
+in GitHub Actions secrets.
+
+### Phase 4 - Generate Encrypted Secrets
+
+Add the Wazuh secret inputs in GitHub Actions secrets.
+
+If using AlienVault OTX, also add:
 
 ```text
-http://shuffle-backend.shuffle.svc.cluster.local:5001/api/v1/hooks/<webhook-id>
+OTX_API_KEY
 ```
 
-Treat this URL like a secret. Anyone with the URL may be able to send data into the
-workflow.
-
-### How Wazuh Sends Alerts To Shuffle
-
-Wazuh uses the Integrator module.
-
-The production-safe config shape used by this repo is:
-
-```xml
-<integration>
-  <name>custom-shuffle-secret</name>
-  <hook_url>secret-mounted-at-runtime</hook_url>
-  <level>7</level>
-  <alert_format>json</alert_format>
-</integration>
-```
-
-The helper script lives at:
+Then run:
 
 ```text
-clusters/production/wazuh/integrations/custom-shuffle-secret
+Generate Wazuh SealedSecrets
 ```
 
-The script is copied into the Wazuh manager by `patches/agent-group-bootstrap.yaml`.
-It reads the real webhook URL from:
+Review and merge the PR. The PR should contain encrypted YAML only.
+
+### Phase 5 - Deploy Wazuh
+
+After encrypted secrets are merged, Flux applies:
 
 ```text
-/var/ossec/secrets/shuffle-webhook/hook_url
+clusters/testing/aws/wazuh
 ```
 
-That file comes from the optional SealedSecret generated when `SHUFFLE_WEBHOOK_URL`
-exists in GitHub Actions secrets.
-
-For the current boss demo, explain it this way:
+Expected pods:
 
 ```text
-Wazuh alert forwarding is automated, but the webhook URL remains protected. Git only
-contains encrypted SealedSecret YAML, not the plaintext Shuffle webhook.
+wazuh-indexer-0
+wazuh-indexer-1
+wazuh-indexer-2
+wazuh-manager-master-0
+wazuh-manager-worker-0
+wazuh-manager-worker-1
+wazuh-dashboard-...
 ```
 
-### How To Set Up AlienVault OTX
+Verify:
 
-AlienVault OTX is used for threat intelligence enrichment.
+```bash
+kubectl get pods -n wazuh
+kubectl get svc -n wazuh
+kubectl get pvc -n wazuh
+kubectl get secrets -n wazuh
+```
 
-Setup:
+All Wazuh services should be `ClusterIP`.
 
-1. Create or log in to an OTX account.
-2. Go to the OTX settings page.
-3. Copy the API key.
-4. Store it in Shuffle's secret store as `OTX_API_KEY`.
-5. In the Shuffle workflow, add an OTX app action or HTTP request action.
-6. Use the Wazuh alert fields as input indicators.
+### Phase 6 - Private Dashboard Access
 
-Common indicator types:
+For a quick test:
+
+```bash
+kubectl port-forward -n wazuh svc/dashboard 5601:443
+```
+
+Open:
 
 ```text
-IP address
-domain
-URL
-file hash
+https://localhost:5601
 ```
 
-If using a generic HTTP action, the OTX API key is commonly sent with:
+For real use, put the dashboard behind VPN or internal ingress. Do not expose it with
+a public LoadBalancer.
+
+### Phase 7 - Enroll The 8 Windows Laptops
+
+Install the Wazuh agent on each BIGMODS laptop.
+
+Enroll each laptop into:
 
 ```text
-X-OTX-API-KEY: <OTX_API_KEY>
+windows-endpoints
 ```
 
-### How To Set Up DFIR-IRIS
-
-DFIR-IRIS is the case management system.
-
-DFIR-IRIS replaces TheHive in this design because the current requirement is an
-open-source case management path without a commercial-trial dependency.
-
-This repo now includes a self-hosted DFIR-IRIS deployment at:
-
-```text
-clusters/testing/aws/dfir-iris
-```
-
-Setup:
-
-1. Deploy `clusters/testing/aws/dfir-iris`.
-2. Access DFIR-IRIS through VPN/private ingress.
-3. Log in with the administrator credentials provided through SealedSecrets.
-4. Create a case template for Wazuh alerts if desired.
-5. Create a service account/user for Shuffle, for example `shuffle-wazuh`.
-6. Give it only the permissions needed to create alerts/cases and observables.
-7. Generate or copy the API key for that user.
-8. Store these values in Shuffle's secret store:
-
-```text
-DFIR_IRIS_URL
-DFIR_IRIS_API_KEY
-```
-
-DFIR-IRIS exposes an API that Shuffle can call with the IRIS API key.
-
-In Shuffle:
-
-1. Add an HTTP request action or DFIR-IRIS-compatible app action if available.
-2. Create a DFIR-IRIS alert or case when a Wazuh alert is high enough priority.
-3. Add observables such as source IP, destination IP, domain, URL, username, hostname,
-   and file hash.
-4. If OTX says an indicator is suspicious, raise severity or create a case.
-
-Suggested logic:
-
-```text
-If Wazuh rule level >= 7:
-  create DFIR-IRIS alert
-
-If OTX finds malicious indicator:
-  set DFIR-IRIS severity to High
-  add OTX pulse/context as an observable or alert detail
-
-If Wazuh rule level >= 12:
-  create DFIR-IRIS case immediately
-```
-
-## Microsoft Defender Integration
-
-Microsoft Defender is not configured in the Wazuh manager directly.
-
-It is configured in the Windows agent group:
-
-```text
-clusters/production/wazuh/agent-groups/windows-endpoints-agent.conf
-```
-
-That file tells all Windows endpoints in the `windows-endpoints` group to collect:
-
-```text
-Microsoft-Windows-Windows Defender/Operational
-Microsoft-Windows-Sysmon/Operational
-```
-
-Because `patches/agent-group-bootstrap.yaml` writes this file into the Wazuh manager's
-shared group folder, the config is pushed automatically to agents in that group.
-
-## Network IDS Control With Suricata
-
-For the ISMS network IDS control, the key point is this:
-
-```text
-Windows laptop telemetry is endpoint monitoring.
-Suricata is network monitoring.
-```
-
-The 8 Windows laptops do not need Suricata installed locally. The laptops will be
-assigned to staff and may be used both on the office network and from home. That
-means the network IDS design must cover two traffic paths:
-
-```text
-Office use:
-  laptop -> office switch/firewall/gateway -> Suricata or firewall NIDS
-
-Home/remote use:
-  laptop -> always-on VPN/SASE/private access path -> Suricata, AWS Network Firewall,
-  or equivalent inspection point
-```
-
-To satisfy the network IDS control for remote users, do not rely on a sensor sitting
-only in the office. It will not see home-network traffic unless the laptop is forced
-through VPN/SASE or another inspection path.
-
-Deploy a dedicated Suricata sensor where laptop traffic passes. That sensor can be a
-Linux VM, firewall appliance, VPN egress sensor, SPAN/TAP-connected sensor, or
-managed AWS inspection path.
-
-The clean BIGMODS design is:
-
-```text
-8 Windows laptops
-  -> VPN / office gateway / routed inspection path
-  -> Suricata network IDS sensor
-  -> /var/log/suricata/eve.json
-  -> Wazuh agent on the sensor
-  -> Wazuh group: suricata-sensors
-  -> Wazuh dashboard alerts
-```
-
-This satisfies the control because the organization has network IDS visibility over
-traffic from the Windows endpoints. The Suricata sensor is not counted as one of the
-8 Windows endpoints; it is a security monitoring component.
-
-This repo configures Wazuh to ingest Suricata alerts through this agent group:
-
-```text
-clusters/production/wazuh/agent-groups/suricata-sensors-agent.conf
-```
-
-That file tells Suricata sensors to collect:
-
-```text
-/var/log/suricata/eve.json
-```
-
-Deployment choices:
-
-| Option | Best use | Notes |
-|---|---|---|
-| Suricata on office firewall or SPAN/TAP sensor | Office laptops using office network | Strong classic NIDS evidence |
-| Suricata at VPN egress | Remote laptops forced through VPN | Best fit if BIGMODS wants one NIDS story for office and home use |
-| AWS Network Firewall with Suricata-compatible rules | Traffic routed through AWS | Managed option; send alert logs to Wazuh through AWS log ingestion |
-| SASE/SSE provider with IDS/IPS logging | Staff often work from home | Good enterprise option if logs can be exported to Wazuh/Shuffle |
-| Suricata installed on each Windows laptop | Last resort only | Harder to manage, noisy, performance risk, not the recommended control design |
-
-For the current Windows-only scope, use `windows-endpoints` for laptop telemetry and
-`suricata-sensors` for the separate NIDS sensor.
-
-Recommended BIGMODS control decision:
-
-```text
-Use Wazuh + Sysmon + AV/EDR on every laptop.
-Use always-on VPN or SASE for remote access.
-Inspect office and VPN/SASE egress traffic with Suricata, AWS Network Firewall, or
-an equivalent IDS/IPS service.
-Send NIDS alerts into Wazuh/Shuffle/DFIR-IRIS.
-```
-
-If the VPN is split-tunnel, be precise in the ISMS evidence:
-
-```text
-NIDS covers corporate traffic routed through the VPN/private network.
-Endpoint AV/EDR, DNS filtering, firewall policy, and Sysmon/Wazuh cover local home
-internet activity that does not pass through the network IDS sensor.
-```
-
-If the control requires network IDS coverage for all laptop traffic everywhere, use
-full-tunnel always-on VPN or SASE/SSE. Otherwise, the office sensor sees office
-traffic only.
-
-## Enrolling The 8 BIGMODS Windows Laptops
-
-The Kubernetes deployment does not magically install software on laptops. The Wazuh
-agent still needs to be installed on each laptop.
-
-Recommended rollout method:
-
-```text
-Microsoft Intune, GPO, RMM, or scripted PowerShell deployment
-```
-
-Each Windows laptop should be installed with:
-
-```text
-Manager address: private Wazuh manager endpoint reachable over VPN
-Enrollment group: windows-endpoints
-Enrollment password: WAZUH_AUTHD_PASS
-```
-
-The endpoint group must exist before enrollment. This repo creates the group folder
-and `agent.conf` through the Wazuh manager bootstrap.
-
-Agent config concept:
+The agent enrollment config should include:
 
 ```xml
 <client>
-  <server>
-    <address>wazuh.internal.bigmods.example</address>
-    <port>1514</port>
-    <protocol>tcp</protocol>
-  </server>
   <enrollment>
     <groups>windows-endpoints</groups>
   </enrollment>
 </client>
 ```
 
-For the 8 BIGMODS laptops, track them like this:
+After enrollment, verify in the Wazuh dashboard:
 
-| Laptop | Expected group | Status |
-|---|---|---|
-| BIGMODS-WIN-01 | windows-endpoints | To enroll |
-| BIGMODS-WIN-02 | windows-endpoints | To enroll |
-| BIGMODS-WIN-03 | windows-endpoints | To enroll |
-| BIGMODS-WIN-04 | windows-endpoints | To enroll |
-| BIGMODS-WIN-05 | windows-endpoints | To enroll |
-| BIGMODS-WIN-06 | windows-endpoints | To enroll |
-| BIGMODS-WIN-07 | windows-endpoints | To enroll |
-| BIGMODS-WIN-08 | windows-endpoints | To enroll |
+- All 8 agents appear.
+- Each agent is active.
+- Each agent belongs to `windows-endpoints`.
+- Group config status is synced.
+- Defender events appear.
+- Sysmon events appear after Sysmon is installed.
 
-Success criteria:
+## Remote Laptop Reality
 
-```text
-All 8 laptops show Active in Wazuh dashboard.
-All 8 laptops belong to windows-endpoints.
-All 8 laptops show synced group configuration.
-Windows Defender events appear in Wazuh.
-Sysmon events appear in Wazuh if Sysmon is installed.
-```
+The laptops will be assigned to staff and used in the office and at home.
 
-## Full Deployment Flow
+That means there are two traffic cases:
 
-Use this order:
+1. Office traffic.
+2. Home/remote traffic.
 
-1. Build AWS EKS cluster.
-2. Install required EKS add-ons, especially AWS EBS CSI driver.
-3. Install FluxCD and connect Flux to this Git repository.
-4. Configure Flux to apply `clusters/testing/aws/sealed-secrets`.
-5. Wait for SealedSecrets controller to be ready.
-6. Get the SealedSecrets public certificate.
-7. Add all required GitHub Actions secrets.
-8. Run `Generate SOC Platform SealedSecrets`.
-9. Review and merge the generated PR.
-10. Configure Flux to apply `clusters/testing/aws/wazuh`.
-11. Wait for Wazuh pods and PVCs to become ready.
-12. Configure Flux to apply `clusters/testing/aws/shuffle`.
-13. Wait for Shuffle frontend, backend, Orborus, and OpenSearch to become ready.
-14. Configure Flux to apply `clusters/testing/aws/dfir-iris`.
-15. Wait for DFIR-IRIS app, worker, PostgreSQL, and RabbitMQ to become ready.
-16. Confirm Wazuh, Shuffle, and DFIR-IRIS services are `ClusterIP`.
-17. Configure VPN/private access to Wazuh dashboard, Shuffle UI, and DFIR-IRIS UI.
-18. Configure VPN/private agent path to ports `1514/TCP` and `1515/TCP`.
-19. Set up Shuffle workflow webhook.
-20. Store OTX and DFIR-IRIS credentials in Shuffle.
-21. Configure Wazuh-to-Shuffle webhook securely.
-22. Choose the network IDS location for Windows laptop traffic.
-23. Deploy Suricata or AWS Network Firewall on that traffic path.
-24. If using self-hosted Suricata, install the Wazuh agent on the sensor and enroll it into `suricata-sensors`.
-25. Enroll all 8 BIGMODS Windows laptops into `windows-endpoints`.
-26. Verify group config sync.
-27. Verify Defender events, Suricata alerts, Wazuh alerts, Shuffle executions, OTX enrichment, and DFIR-IRIS alerts/cases.
+For endpoint monitoring, Wazuh works in both cases as long as the laptop can reach the
+Wazuh manager.
 
-## Verification Checklist
+For network IDS, a central Suricata sensor only sees traffic that passes through it.
+So for home users, choose one:
 
-### Cluster
+- Always-on VPN so laptop traffic returns through the office/AWS inspection point.
+- SASE/SSE provider with IDS/IPS logging.
+- Managed endpoint EDR/NDR product that gives cloud telemetry.
+
+If users work from home with split tunnel and direct internet access, your office
+Suricata sensor will not see that home internet traffic.
+
+## Enterprise AV Later
+
+If BIGMODS chooses an enterprise AV or EDR later, Wazuh does not need to be thrown
+away.
+
+The pattern becomes:
 
 ```text
-EKS cluster exists.
-AWS EBS CSI driver exists.
-Flux is reconciled.
-SealedSecrets controller is running.
-Wazuh namespace exists.
-Wazuh PVCs are bound.
-Wazuh pods are running.
+Enterprise AV/EDR
+  -> Windows Event Logs, syslog, API, or SIEM connector
+  -> Wazuh
 ```
 
-### Network
+Examples:
 
-```text
-No public LoadBalancer for Wazuh dashboard.
-No public LoadBalancer for Shuffle UI.
-No public LoadBalancer for DFIR-IRIS UI.
-Dashboard service is ClusterIP.
-Wazuh manager service is ClusterIP.
-VPN/private route exists for SOC users.
-VPN/private route exists for Windows laptops.
-```
+- Microsoft Defender for Endpoint.
+- CrowdStrike.
+- SentinelOne.
+- Sophos.
+- Trend Micro.
+- Bitdefender GravityZone.
 
-### Secrets
+The exact integration depends on the product. The Wazuh Windows group config can be
+extended to collect the vendor event channel if the product writes to Windows Event
+Log.
 
-```text
-No .env committed.
-No plaintext Secret YAML committed.
-SealedSecret YAML exists for Wazuh credentials.
-SealedSecret YAML exists for Shuffle credentials.
-SealedSecret YAML exists for DFIR-IRIS credentials.
-Optional SealedSecret YAML exists for Wazuh-to-Shuffle webhook after the Shuffle workflow is created.
-Kubernetes Secret objects are created by SealedSecrets controller.
-Indexer password matches internal_users.yml bcrypt hash.
-Dashboard service password matches internal_users.yml bcrypt hash.
-```
+## Sysmon Explanation
 
-### Endpoint Enrollment
+Sysmon is a Microsoft Windows monitoring tool.
 
-```text
-8 BIGMODS Windows laptops installed with Wazuh agent.
-8 BIGMODS Windows laptops enrolled into windows-endpoints.
-8 BIGMODS Windows laptops show Active.
-8 BIGMODS Windows laptops show group_config_status synced.
-Windows Defender events visible.
-```
+It records detailed endpoint activity such as:
 
-### Network IDS
+- Process creation.
+- Network connections.
+- File creation.
+- Driver loads.
+- Registry activity.
+- PowerShell-related activity when configured.
 
-```text
-Suricata sensor or AWS Network Firewall is deployed on the laptop traffic path.
-Office laptop traffic path is documented.
-Remote laptop traffic path is documented.
-Always-on VPN, SASE, or split-tunnel scope decision is documented.
-Network IDS rules are enabled.
-If self-hosted Suricata is used, sensor is enrolled in Wazuh group suricata-sensors.
-Suricata eve.json alerts appear in Wazuh.
-Evidence exists for ISMS audit: sensor location, rule source, alert sample, response workflow.
-```
+Defender tells you about malware and protection events. Sysmon tells you what the
+machine is doing. Together, they make Wazuh much better for investigation.
 
-### Integrations
+## What Is Automated
 
-```text
-Shuffle workflow exists.
-Shuffle webhook is active.
-Wazuh can send alerts to Shuffle.
-OTX API key stored in Shuffle.
-DFIR-IRIS API key stored in Shuffle.
-Shuffle creates DFIR-IRIS alert/case from Wazuh alert.
-```
+Automated by GitOps:
 
-## Risks And Design Notes
+- SealedSecrets controller deployment.
+- Wazuh deployment.
+- Private service configuration.
+- Storage class and PVC configuration.
+- Agent group config bootstrapping.
+- OTX integration script installation.
+- Encrypted secret application after SealedSecrets are generated.
 
-- The dashboard is not public because services are patched to `ClusterIP`.
-- A private ingress or VPN path is still required for real users.
-- Endpoint enrollment needs private access to Wazuh manager ports.
-- The real Shuffle webhook URL should not be committed to Git.
-- DFIR-IRIS and OTX API keys should live in Shuffle or a secret manager, not Wazuh ConfigMaps.
-- The current repo deploys Wazuh, SealedSecrets, Shuffle, and DFIR-IRIS.
-- The current repo configures Microsoft Defender collection through the Windows group
-  and Suricata collection through the dedicated `suricata-sensors` group.
-- A Suricata Wazuh group alone does not satisfy the network IDS control. The control
-  is satisfied only when the sensor is placed where BIGMODS Windows laptop traffic
-  actually passes.
-- If staff use laptops from home without full-tunnel VPN or SASE, an office Suricata
-  sensor will not inspect that home internet traffic. In that case, document split
-  coverage and use endpoint AV/EDR, DNS filtering, host firewall policy, and Wazuh
-  telemetry as compensating controls.
-- The included Shuffle Kubernetes manifests are suitable for AWS testing. Before
-  final production, pin tested Shuffle image tags instead of `latest` and decide on
-  the backup/restore and scaling model.
-- DFIR-IRIS is pinned to `v2.4.27` because both the app and database image tags are
-  published. Review DFIR-IRIS release notes before upgrading.
-- Back up Wazuh indexer data, Shuffle OpenSearch data, and DFIR-IRIS PostgreSQL data
-  before any production handoff.
+Still one-time human/administrator actions:
 
-## References
+- Create the AWS cluster or trigger the IaC pipeline that creates it.
+- Create GitHub Actions secrets.
+- Create and keep the GitHub token locally for Flux bootstrap.
+- Get the AlienVault OTX API key from the OTX portal.
+- Install Wazuh agents on the laptops through Intune, GPO, RMM, or script.
+- Provide VPN/private access to the dashboard.
 
-- Official Wazuh Kubernetes deployment: `https://documentation.wazuh.com/current/deployment-options/deploying-with-kubernetes/kubernetes-deployment.html`
-- Wazuh external integrations: `https://documentation.wazuh.com/current/user-manual/manager/integration-with-external-apis.html`
-- Wazuh centralized agent configuration: `https://documentation.wazuh.com/current/user-manual/reference/centralized-configuration.html`
-- Wazuh Windows enrollment groups: `https://documentation.wazuh.com/current/user-manual/agent/agent-enrollment/enrollment-methods/via-agent-configuration/windows-endpoint.html`
-- Shuffle self-hosted install guide: `https://github.com/Shuffle/Shuffle/blob/main/.github/install-guide.md`
-- AWS EBS CSI driver for EKS: `https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html`
-- DFIR-IRIS documentation: `https://docs.dfir-iris.org/`
-- DFIR-IRIS container images: `https://github.com/dfir-iris/iris-web/pkgs/container/iriswebapp_app`
-- AlienVault OTX API SDK reference: `https://github.com/AlienVault-OTX/OTX-Python-SDK`
+## Boss-Facing Summary
+
+We are deploying Wazuh as a private Kubernetes-based security monitoring platform on
+AWS EKS. The dashboard is not publicly exposed. The 8 Windows laptops will be enrolled
+into a central Wazuh group so Microsoft Defender and Sysmon settings are pushed
+automatically. Secrets are handled with SealedSecrets, so only encrypted secrets are
+stored in Git. AlienVault OTX is integrated through a custom Wazuh integration and
+can be enabled as soon as the OTX API key is supplied. Shuffle and DFIR-IRIS are
+optional later-phase tools and are not deployed in the current scope.

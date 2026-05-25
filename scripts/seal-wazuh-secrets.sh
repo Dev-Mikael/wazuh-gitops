@@ -10,22 +10,8 @@ set -euo pipefail
 : "${DASHBOARD_PASSWORD:?Set DASHBOARD_PASSWORD.}"
 : "${INDEXER_USERNAME:?Set INDEXER_USERNAME.}"
 : "${INDEXER_PASSWORD:?Set INDEXER_PASSWORD.}"
-: "${SHUFFLE_OPENSEARCH_PASSWORD:?Set SHUFFLE_OPENSEARCH_PASSWORD.}"
-: "${SHUFFLE_ENCRYPTION_MODIFIER:?Set SHUFFLE_ENCRYPTION_MODIFIER.}"
-: "${SHUFFLE_DEFAULT_USERNAME:?Set SHUFFLE_DEFAULT_USERNAME.}"
-: "${SHUFFLE_DEFAULT_PASSWORD:?Set SHUFFLE_DEFAULT_PASSWORD.}"
-: "${SHUFFLE_DEFAULT_APIKEY:?Set SHUFFLE_DEFAULT_APIKEY.}"
-: "${DFIR_IRIS_POSTGRES_PASSWORD:?Set DFIR_IRIS_POSTGRES_PASSWORD.}"
-: "${DFIR_IRIS_POSTGRES_ADMIN_USER:?Set DFIR_IRIS_POSTGRES_ADMIN_USER.}"
-: "${DFIR_IRIS_POSTGRES_ADMIN_PASSWORD:?Set DFIR_IRIS_POSTGRES_ADMIN_PASSWORD.}"
-: "${DFIR_IRIS_SECRET_KEY:?Set DFIR_IRIS_SECRET_KEY.}"
-: "${DFIR_IRIS_SECURITY_PASSWORD_SALT:?Set DFIR_IRIS_SECURITY_PASSWORD_SALT.}"
-: "${DFIR_IRIS_ADMIN_PASSWORD:?Set DFIR_IRIS_ADMIN_PASSWORD.}"
-: "${DFIR_IRIS_ADMIN_API_KEY:?Set DFIR_IRIS_ADMIN_API_KEY.}"
 
 wazuh_out_dir="${1:-clusters/production/wazuh/secrets/sealed}"
-shuffle_out_dir="${SHUFFLE_SECRETS_OUT_DIR:-clusters/testing/aws/shuffle/secrets/sealed}"
-dfir_iris_out_dir="${DFIR_IRIS_SECRETS_OUT_DIR:-clusters/testing/aws/dfir-iris/secrets/sealed}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -48,7 +34,7 @@ seal_secret() {
     > "$out_dir/$name.yaml"
 }
 
-mkdir -p "$wazuh_out_dir" "$shuffle_out_dir" "$dfir_iris_out_dir"
+mkdir -p "$wazuh_out_dir"
 
 seal_secret "$wazuh_out_dir" wazuh wazuh-api-cred \
   --from-literal="username=$WAZUH_API_USERNAME" \
@@ -68,9 +54,9 @@ seal_secret "$wazuh_out_dir" wazuh indexer-cred \
   --from-literal="username=$INDEXER_USERNAME" \
   --from-literal="password=$INDEXER_PASSWORD"
 
-if [[ -n "${SHUFFLE_WEBHOOK_URL:-}" && "$SHUFFLE_WEBHOOK_URL" != *replace-me* ]]; then
-  seal_secret "$wazuh_out_dir" wazuh wazuh-shuffle-webhook \
-    --from-literal="hook_url=$SHUFFLE_WEBHOOK_URL"
+if [[ -n "${OTX_API_KEY:-}" && "$OTX_API_KEY" != *replace-* ]]; then
+  seal_secret "$wazuh_out_dir" wazuh wazuh-otx-api-key \
+    --from-literal="api_key=$OTX_API_KEY"
 fi
 
 cat > "$wazuh_out_dir/kustomization.yaml" <<'EOF'
@@ -85,42 +71,9 @@ resources:
   - indexer-cred.yaml
 EOF
 
-if [[ -n "${SHUFFLE_WEBHOOK_URL:-}" && "$SHUFFLE_WEBHOOK_URL" != *replace-me* ]]; then
-  printf '  - wazuh-shuffle-webhook.yaml\n' >> "$wazuh_out_dir/kustomization.yaml"
+if [[ -n "${OTX_API_KEY:-}" && "$OTX_API_KEY" != *replace-* ]]; then
+  printf '  - wazuh-otx-api-key.yaml\n' >> "$wazuh_out_dir/kustomization.yaml"
 fi
-
-seal_secret "$shuffle_out_dir" shuffle shuffle-secrets \
-  --from-literal="OPENSEARCH_INITIAL_ADMIN_PASSWORD=$SHUFFLE_OPENSEARCH_PASSWORD" \
-  --from-literal="SHUFFLE_OPENSEARCH_PASSWORD=$SHUFFLE_OPENSEARCH_PASSWORD" \
-  --from-literal="SHUFFLE_ENCRYPTION_MODIFIER=$SHUFFLE_ENCRYPTION_MODIFIER" \
-  --from-literal="SHUFFLE_DEFAULT_USERNAME=$SHUFFLE_DEFAULT_USERNAME" \
-  --from-literal="SHUFFLE_DEFAULT_PASSWORD=$SHUFFLE_DEFAULT_PASSWORD" \
-  --from-literal="SHUFFLE_DEFAULT_APIKEY=$SHUFFLE_DEFAULT_APIKEY"
-
-cat > "$shuffle_out_dir/kustomization.yaml" <<'EOF'
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - shuffle-secrets.yaml
-EOF
-
-seal_secret "$dfir_iris_out_dir" dfir-iris dfir-iris-secrets \
-  --from-literal="POSTGRES_PASSWORD=$DFIR_IRIS_POSTGRES_PASSWORD" \
-  --from-literal="POSTGRES_ADMIN_USER=$DFIR_IRIS_POSTGRES_ADMIN_USER" \
-  --from-literal="POSTGRES_ADMIN_PASSWORD=$DFIR_IRIS_POSTGRES_ADMIN_PASSWORD" \
-  --from-literal="IRIS_SECRET_KEY=$DFIR_IRIS_SECRET_KEY" \
-  --from-literal="IRIS_SECURITY_PASSWORD_SALT=$DFIR_IRIS_SECURITY_PASSWORD_SALT" \
-  --from-literal="IRIS_ADM_PASSWORD=$DFIR_IRIS_ADMIN_PASSWORD" \
-  --from-literal="IRIS_ADM_API_KEY=$DFIR_IRIS_ADMIN_API_KEY"
-
-cat > "$dfir_iris_out_dir/kustomization.yaml" <<'EOF'
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - dfir-iris-secrets.yaml
-EOF
 
 python3 - <<'PY'
 import os
@@ -147,5 +100,6 @@ path.write_text(text)
 PY
 
 echo "Generated sealed Wazuh secrets in $wazuh_out_dir"
-echo "Generated sealed Shuffle secrets in $shuffle_out_dir"
-echo "Generated sealed DFIR-IRIS secrets in $dfir_iris_out_dir"
+if [[ -n "${OTX_API_KEY:-}" && "$OTX_API_KEY" != *replace-* ]]; then
+  echo "Generated sealed AlienVault OTX secret in $wazuh_out_dir"
+fi

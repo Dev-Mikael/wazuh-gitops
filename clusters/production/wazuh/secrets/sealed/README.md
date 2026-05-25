@@ -1,16 +1,17 @@
-# Generated SealedSecrets
+# Generated Wazuh SealedSecrets
 
-This directory is populated by `.github/workflows/generate-wazuh-sealed-secrets.yml`.
+This directory is populated by `.github/workflows/generate-wazuh-sealed-secrets.yml`
+or by `scripts/seal-wazuh-secrets.sh` during local testing.
 
-The checked-in default has no resources so the repo can render before secrets are
-generated. After the workflow runs, it opens a PR that adds:
+After generation, it contains encrypted manifests such as:
 
 - `wazuh-api-cred.yaml`
 - `wazuh-authd-pass.yaml`
 - `wazuh-cluster-key.yaml`
 - `dashboard-cred.yaml`
 - `indexer-cred.yaml`
-- `wazuh-shuffle-webhook.yaml` if `SHUFFLE_WEBHOOK_URL` is supplied
-- an updated `kustomization.yaml` listing those files
+- `wazuh-otx-api-key.yaml` if `OTX_API_KEY` is supplied
+- an updated `kustomization.yaml` listing the generated files
 
-Only encrypted `SealedSecret` manifests belong here.
+Only encrypted `SealedSecret` manifests belong here. Plaintext `.env` files and raw
+Kubernetes `Secret` manifests must not be committed.

@@ -1,0 +1,85 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: wazuh-soc
+  region: us-east-1
+  version: "1.35"
+
+autoModeConfig:
+  enabled: false
+
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+  bootstrapClusterCreatorAdminPermissions: true
+
+iam:
+  withOIDC: true
+
+availabilityZones:
+  - us-east-1a
+  - us-east-1b
+  - us-east-1c
+
+vpc:
+  cidr: 192.168.0.0/16
+  nat:
+    gateway: Single
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+  publicAccessCIDRs:
+    - 0.0.0.0/0
+
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+      - api
+      - audit
+      - authenticator
+    logRetentionInDays: 7
+
+managedNodeGroups:
+  - name: wazuh-workers
+    amiFamily: AmazonLinux2023
+    instanceTypes:
+      - m6i.xlarge
+      - m6a.xlarge
+      - m7i.xlarge
+      - m7a.xlarge
+    availabilityZones:
+      - us-east-1a
+      - us-east-1b
+      - us-east-1c
+    minSize: 3
+    maxSize: 5
+    desiredCapacity: 3
+    volumeSize: 100
+    volumeType: gp3
+    volumeEncrypted: true
+    volumeIOPS: 3000
+    volumeThroughput: 125
+    ebsOptimized: true
+    privateNetworking: true
+    disableIMDSv1: true
+    ssh:
+      allow: false
+    labels:
+      role: wazuh-worker
+    tags:
+      Project: wazuh-soc
+      Environment: testing
+
+addons:
+  - name: vpc-cni
+    resolveConflicts: OVERWRITE
+  - name: coredns
+    resolveConflicts: OVERWRITE
+  - name: kube-proxy
+    resolveConflicts: OVERWRITE
+  - name: metrics-server
+    resolveConflicts: OVERWRITE
+  - name: aws-ebs-csi-driver
+    resolveConflicts: OVERWRITE
+    wellKnownPolicies:
+      ebsCSIController: true

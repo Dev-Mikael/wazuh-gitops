@@ -16,7 +16,7 @@ configMapGenerator:
   - name: wazuh-manager-integrations
     namespace: wazuh
     files:
-      - custom-shuffle-secret=integrations/custom-shuffle-secret
+      - custom-alienvault-secret=integrations/custom-alienvault-secret
     options:
       disableNameSuffixHash: true
 

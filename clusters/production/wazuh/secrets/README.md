@@ -1,51 +1,42 @@
-# SOC Platform Secrets
+# Wazuh Secrets
 
 The official Wazuh Kubernetes manifests include example credentials. This overlay
-removes those example Secrets so public defaults are not deployed by accident.
+removes those defaults with `../patches/delete-default-secrets.yaml` so public
+example passwords are not deployed by accident.
 
-This repository is configured for SealedSecrets. The upstream Wazuh example Secrets
-are removed by `../patches/delete-default-secrets.yaml`, and generated SealedSecrets
-must provide the same secret names and keys.
+This repo uses SealedSecrets. The safe production pattern is:
 
-For your AWS test flow:
+1. Store plaintext values as GitHub Actions secrets.
+2. Run the `Generate Wazuh SealedSecrets` workflow.
+3. Review and merge the PR containing encrypted `SealedSecret` YAML.
+4. Let Flux apply the encrypted manifests to the cluster.
 
-- Install the controller from `clusters/testing/aws/sealed-secrets`.
-- Generate encrypted secret manifests with `.github/workflows/generate-wazuh-sealed-secrets.yml`.
-- Deploy Wazuh from `clusters/testing/aws/wazuh`.
-- Deploy Shuffle from `clusters/testing/aws/shuffle`.
-- Deploy DFIR-IRIS from `clusters/testing/aws/dfir-iris`.
+Do not commit `.env` files. A `.env` file is acceptable only as local throwaway input
+when testing the sealing script, and it must stay ignored by Git.
 
-The generated encrypted manifests land in:
+## Required Kubernetes Secrets
 
-```text
-clusters/production/wazuh/secrets/sealed/
-clusters/testing/aws/shuffle/secrets/sealed/
-clusters/testing/aws/dfir-iris/secrets/sealed/
-```
-
-Do not commit `.env` files. They are not production-grade secret storage. They are
-useful only as local temporary input, and even then they must stay outside Git.
-
-Required secret names and keys:
+The Wazuh manifests expect these Secret names and keys in the `wazuh` namespace:
 
 - `wazuh-api-cred`: `username`, `password`
 - `wazuh-authd-pass`: `authd.pass`
 - `wazuh-cluster-key`: `key`
 - `dashboard-cred`: `username`, `password`
 - `indexer-cred`: `username`, `password`
-- `wazuh-shuffle-webhook`: `hook_url` (optional, generated after the Shuffle workflow exists)
-- `shuffle-secrets`: `OPENSEARCH_INITIAL_ADMIN_PASSWORD`, `SHUFFLE_OPENSEARCH_PASSWORD`, `SHUFFLE_ENCRYPTION_MODIFIER`, `SHUFFLE_DEFAULT_USERNAME`, `SHUFFLE_DEFAULT_PASSWORD`, `SHUFFLE_DEFAULT_APIKEY`
-- `dfir-iris-secrets`: `POSTGRES_PASSWORD`, `POSTGRES_ADMIN_USER`, `POSTGRES_ADMIN_PASSWORD`, `IRIS_SECRET_KEY`, `IRIS_SECURITY_PASSWORD_SALT`, `IRIS_ADM_PASSWORD`, `IRIS_ADM_API_KEY`
 
-You input the plaintext values as GitHub Actions secrets, not as files in this repo.
+Optional AlienVault OTX integration:
 
-Go to:
+- `wazuh-otx-api-key`: `api_key`
+
+## GitHub Actions Secret Inputs
+
+Create these under:
 
 ```text
 Repository -> Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-Create:
+Required:
 
 ```text
 SEALED_SECRETS_PUBLIC_CERT
@@ -57,32 +48,24 @@ DASHBOARD_USERNAME
 DASHBOARD_PASSWORD
 INDEXER_USERNAME
 INDEXER_PASSWORD
-SHUFFLE_OPENSEARCH_PASSWORD
-SHUFFLE_ENCRYPTION_MODIFIER
-SHUFFLE_DEFAULT_USERNAME
-SHUFFLE_DEFAULT_PASSWORD
-SHUFFLE_DEFAULT_APIKEY
-DFIR_IRIS_POSTGRES_PASSWORD
-DFIR_IRIS_POSTGRES_ADMIN_USER
-DFIR_IRIS_POSTGRES_ADMIN_PASSWORD
-DFIR_IRIS_SECRET_KEY
-DFIR_IRIS_SECURITY_PASSWORD_SALT
-DFIR_IRIS_ADMIN_PASSWORD
-DFIR_IRIS_ADMIN_API_KEY
 ```
 
-Optional after the Shuffle workflow exists:
+Optional:
 
 ```text
-SHUFFLE_WEBHOOK_URL
+OTX_API_KEY
 ```
 
-Then run the `Generate SOC Platform SealedSecrets` workflow.
+`OTX_API_KEY` comes from AlienVault OTX. If it is not supplied, Wazuh still deploys;
+the custom OTX integration script simply skips lookups until the secret exists.
 
-When changing `indexer-cred.password` or `dashboard-cred.password`, update the
-matching bcrypt hashes for `admin` and `kibanaserver` in
-`../upstream/indexer_stack/wazuh-indexer/indexer_conf/internal_users.yml`.
+When changing `indexer-cred.password` or `dashboard-cred.password`, the sealing
+workflow also updates the matching bcrypt hashes in:
+
+```text
+../upstream/indexer_stack/wazuh-indexer/indexer_conf/internal_users.yml
+```
 
 The certificate files under `../upstream/certs/` were generated locally from the
 official Wazuh helper scripts. Replace them with environment-specific production
-certificates before deploying to a real cluster.
+certificates before a real production handoff.

@@ -1,27 +1,21 @@
 <ossec_config>
   <!--
-    Wazuh-to-Shuffle integration used by this repository.
+    Wazuh-to-AlienVault OTX integration used by this repository.
 
-    Native Wazuh Shuffle integration requires the Shuffle hook URL directly in
-    ossec.conf. To avoid committing that secret to Git, this repo uses a custom
-    integration script named custom-shuffle-secret. The script reads the real hook
-    URL from the Kubernetes Secret named wazuh-shuffle-webhook.
+    This repo uses a custom integration script named custom-alienvault-secret. The
+    script reads the real OTX API key from the Kubernetes Secret named
+    wazuh-otx-api-key.
 
     The same block is applied in upstream/wazuh_managers/wazuh_conf/master.conf.
   -->
   <integration>
-    <name>custom-shuffle-secret</name>
-    <hook_url>secret-mounted-at-runtime</hook_url>
+    <name>custom-alienvault-secret</name>
     <level>7</level>
     <alert_format>json</alert_format>
   </integration>
 
   <!--
-    DFIR-IRIS and AlienVault OTX are not native Wazuh manager integrations in this
-    repository. They should be configured inside the Shuffle workflow:
-
-      Wazuh alert -> Shuffle webhook -> AlienVault OTX enrichment -> DFIR-IRIS case
-
-    Keep DFIR_IRIS_API_KEY and OTX_API_KEY in the Shuffle/CI secret store.
+    Shuffle and DFIR-IRIS are optional and intentionally not part of the active
+    deployment path right now.
   -->
 </ossec_config>
